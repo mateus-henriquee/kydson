@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { LOGO_SRC } from "../components/Logo";
-import { api, ApiError } from "./api";
-import type { SessionUser } from "./types";
+import { useAuth } from "../state/AuthContext";
 
-export function Login({ onLogin }: { onLogin: (u: SessionUser) => void }) {
+export function Login() {
+  const auth = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -14,10 +14,9 @@ export function Login({ onLogin }: { onLogin: (u: SessionUser) => void }) {
     setError("");
     setBusy(true);
     try {
-      const { user } = await api.login(email, password);
-      onLogin(user);
+      await auth.signIn(email, password);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Não foi possível entrar.");
+      setError(err instanceof Error ? err.message : "Não foi possível entrar.");
       setPassword("");
     } finally {
       setBusy(false);
@@ -45,6 +44,11 @@ export function Login({ onLogin }: { onLogin: (u: SessionUser) => void }) {
           <label htmlFor="password">Senha</label>
           <input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
 
+          {!auth.configured && (
+            <p className="adm-error" role="alert">
+              Login não configurado (faltam VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY).
+            </p>
+          )}
           {error && (
             <p className="adm-error" role="alert">
               {error}

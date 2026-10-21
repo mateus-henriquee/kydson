@@ -1,87 +1,62 @@
-# KYDSON — Site + painel dos colaboradores
+# KYDSON — Site + painel + loja online
 
-Stack: Vite + React 18 + TypeScript no front; Node + Express + SQLite (`node:sqlite`, embutido no Node) no painel.
-Sem banco externo: os dados ficam em `data/kydson.db` e as fotos em `data/uploads/`.
+Stack: Vite + React 18 + TypeScript (site e painel) · Node + Express (API) · **Supabase** (Postgres, login, fotos) · **Mercado Pago** (pagamento) · **WhatsApp Cloud API** (aviso à loja) · deploy na **Vercel**.
 
-## Executar
+Deploy passo a passo: veja [DEPLOY.md](DEPLOY.md). Variáveis: [.env.example](.env.example).
 
-Pré-requisito: **Node 22.13 ou superior** (testado no 22 e no 24).
+## Como funciona
+1. Cliente monta o carrinho e clica em **Finalizar compra**. Sem conta, é levado a **criar conta / entrar**.
+2. Informa nome, telefone e endereço. O servidor recalcula o preço no banco, **reserva o estoque por 30 min** e abre o Mercado Pago.
+3. Ao pagar, o Mercado Pago avisa o servidor (webhook). O pedido vira **Pago**, aparece no painel (e entra no faturamento) e a loja recebe um **WhatsApp automático** com cliente, telefone, valor, produtos, horário e endereço.
+4. Ícone dourado do WhatsApp fixo no canto inferior direito abre a conversa com a loja.
 
+## Rodar localmente
+Node 20.6+ e um projeto Supabase (veja DEPLOY.md, passo 1).
 ```bash
 npm install
+cp .env.example .env     # preencha DATABASE_URL, SUPABASE_*, VITE_*
+npm run db:migrate       # cria as tabelas
 npm run user:add -- --name "Seu Nome" --email voce@loja.com --password "senha-forte-123" --role owner
-npm run dev          # http://localhost:5173  (site)  e  /painel  (colaboradores)
+npm run dev              # site em http://localhost:5173 e painel em /painel
 ```
+Pagamento e WhatsApp só funcionam com `MP_*` e `WHATSAPP_*` preenchidos (sem eles, o checkout avisa que está indisponível).
 
-Outros comandos:
-
+## Comandos
 ```bash
-npm run build        # build de produção (dist/)
-npm start            # serve dist/ + API em produção
-npm test             # testes do site (vitest) e da API (node:test)
+npm run build       # typecheck + build (dist/)
+npm test            # vitest (site) + testes da API (banco em memória, serviços simulados)
+npm run typecheck
 ```
 
-## Painel dos colaboradores (`/painel`)
-
-Só entra quem foi cadastrado. Não existe cadastro público.
+## Painel (`/painel`)
+Só entra quem tem função Colaborador ou Proprietário. Clientes não acessam.
 
 | Tela | O que faz |
 |---|---|
-| Login | e-mail + senha; sessão de 8 h |
-| Dashboard | faturamento, pedidos, ticket médio, mês atual × anterior, gráfico por mês, mais vendidos, tabela comparativa. Períodos: 7/30/90 dias, 6/12 meses, este ano ou datas livres |
-| Produtos e Estoque | adicionar, editar e excluir; categoria Relógio, Perfume, Acessório ou Outros; preço, preço promocional, destaque, lançamento, ativo, fotos (setas para ordem), cores, estoque simples ou por tamanho/variação |
-| Pedidos | registrar pedido (baixa o estoque), marcar como pago, cancelar (devolve ao estoque) |
-| Equipe (só proprietário) | criar colaboradores, trocar função, redefinir senha, desativar |
+| Dashboard | faturamento, pedidos, ticket médio, comparativos, mais vendidos |
+| Produtos e Estoque | cadastro, preço/promoção, destaque, lançamento, fotos (até 4 MB), cores, estoque por variação |
+| Pedidos | pedidos do site (entram sozinhos, com cliente, endereço e status do WhatsApp, reenvio e conferência) e pedidos manuais |
+| Equipe (proprietário) | promover cliente a colaborador, criar acessos, trocar função, redefinir senha, desativar |
 
-Só pedidos **pagos** entram no faturamento, no mês da data do pagamento (fuso de São Paulo).
-
-### Criar usuários
-- Primeiro proprietário: `npm run user:add -- --name ... --email ... --password ... --role owner`
-- Esqueceu a senha: `npm run user:add -- --email voce@loja.com --password "nova-senha-123" --reset`
-- Demais pessoas: pela tela **Equipe**.
-
-### Segurança implementada
-- Senhas com scrypt + salt; nunca ficam em texto.
-- Sessão em cookie `HttpOnly` + `SameSite=Lax`; o servidor guarda só o hash do token.
-- Limite de 5 tentativas de login por e-mail/IP a cada 10 min; mensagem de erro genérica.
-- Bloqueio de requisições de escrita vindas de outra origem (CSRF).
-- Upload só de JPG/PNG/WebP, conferido pelo conteúdo do arquivo, até 6 MB.
-- Todas as rotas da API, exceto login, exigem sessão; Equipe exige perfil proprietário.
-- Desativar usuário ou trocar a senha derruba as sessões dele na hora.
-
-### Para publicar de verdade (obrigatório)
-1. Use **HTTPS** e defina `COOKIE_SECURE=true`.
-2. Atrás de proxy (Nginx, Render, Railway…) defina `TRUST_PROXY=true`.
-3. O servidor precisa de disco persistente para `data/` (ou defina `DB_PATH` e `UPLOADS_DIR`). Hospedagem estática pura (Netlify/Vercel só com `dist/`) **não** roda o painel.
-4. Faça backup periódico de `data/`.
-5. Não use as senhas de teste do README em produção.
-
-Variáveis: `PORT`, `DB_PATH`, `UPLOADS_DIR`, `COOKIE_SECURE`, `TRUST_PROXY`, `VITE_WHATSAPP_NUMBER`.
+## Segurança
+- Login pelo Supabase Auth; a API valida o token a cada chamada.
+- Tabelas com RLS ligado e sem políticas públicas: o acesso é só pela API.
+- Preço sempre do banco; valor pago é conferido contra o pedido; webhook com assinatura e idempotente.
+- Limite de 3 pedidos pendentes por cliente; reservas expiradas devolvem o estoque.
+- Chaves secretas só no servidor (Vercel); apenas `VITE_*` vão ao navegador.
 
 ## Site público
 
 | O quê | Onde |
 |---|---|
-| WhatsApp oficial | `.env` → `VITE_WHATSAPP_NUMBER=5511999999999` (DDI+DDD+número) ou `src/config/store.ts` |
-| Catálogo do site | Vem do painel (**Produtos e Estoque**) via `GET /api/catalog`; só produtos **ativos**. Sem produto cadastrado, a vitrine fica vazia. Atualiza sozinho (a cada 20 s, ao voltar para a aba e quando o painel salva) |
-| Páginas | `/` início · `/catalogo` geral · `/catalogo/relogios`, `/perfumes`, `/acessorios`, `/outros` (com filtros de preço, cor, tamanho, destaque e promoção) · `/produto/:id` (galeria, cor, tamanho e recomendações) |
-| Sinalizadores | **Promoção** (preço promocional): selo -%, preço em dourado. **Destaque**: moldura dourada, ocupa 2 colunas no catálogo. **Lançamento**: selo. **Esgotado** (estoque 0): foto em preto e branco, faixa "Esgotado", vai para o fim da lista, sem botão de compra |
-| Cores e tamanhos | No formulário do produto: **Cores** (bolinha + nome) e **Estoque → por tamanho/variação** (ex.: 40/41/42, 50 ml). Os filtros só aparecem quando há dados |
-| Logo | `public/brand/logo.png` |
-| Fonte Euro Sans Pro | `public/fonts/EuroSansPro-Regular.woff2` e `EuroSansPro-Bold.woff2` (licença sua). Sem os arquivos usa a fonte instalada ou um fallback |
-| Cores | tokens no topo de `src/styles.css`: preto `#000`, creme `#F8F0E3`, dourado `#B8935A` (amostrado da logo) |
-| Abertura animada | frames em `public/frames/f_001.webp…f_085.webp`; quantidade, distância de rolagem e escurecimento em `src/config/intro.ts` |
+| WhatsApp da loja (ícone fixo e "Combinar pelo WhatsApp") | `VITE_WHATSAPP_NUMBER=5511999999999` (DDI+DDD+número). Sem ele, o ícone não aparece |
+| Catálogo | Vem do painel via `GET /api/catalog`; só produtos **ativos**. Atualiza sozinho |
+| Páginas | `/` · `/catalogo` · `/catalogo/relogios`, `/perfumes`, `/acessorios`, `/outros` · `/produto/:id` · `/entrar` · `/conta` · `/finalizar` · `/pedido/:id` |
+| Sinalizadores | Ordem: Lançamento / Destaque / Esgotado. Esgotado: foto P&B, sem compra |
+| Logo / fonte | `public/brand/logo.png` · `public/fonts/EuroSansPro-*.woff2` (licença sua) |
+| Cores | tokens no topo de `src/styles.css` (preto, creme, dourado `#B8935A`) |
+| Abertura animada | frames em `public/frames/`; ajustes em `src/config/intro.ts` |
 
-Sem número de WhatsApp o carrinho mostra "configuração pendente" e não gera link.
-
-## Limites desta versão
-- Fotos: a 1ª é a principal, a 2ª aparece ao passar o mouse. Mude a ordem com as setas no formulário.
-- Abrir o WhatsApp não confirma compra; não há pagamento online.
-- Pedidos do site não entram sozinhos no painel: a equipe os registra em **Pedidos**.
-- Sem recuperação de senha por e-mail (a redefinição é feita pelo proprietário ou pelo comando acima).
-- Dourado amostrado da logo, não um valor oficial. O Instagram não foi acessível na criação.
-
-## Próximos passos
-1. Pedido do carrinho já gravado no painel como "aguardando pagamento".
-2. Pagamento online (Pix/cartão), frete e rastreio.
-3. Banco gerenciado (PostgreSQL) se o volume crescer.
+## Pendências suas
+- Criar projeto Supabase, app no Mercado Pago e app/modelo no WhatsApp Cloud API (DEPLOY.md).
+- Fonte Euro Sans Pro: colocar os `.woff2` em `public/fonts/`.

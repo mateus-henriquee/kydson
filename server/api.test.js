@@ -1,255 +1,684 @@
+import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { after, before, describe, it } from "node:test";
+import { HttpError } from "./auth.js";
 import { createApp } from "./app.js";
-import { hashPassword } from "./auth.js";
 import { buildDashboard, parseRange } from "./dashboard.js";
+import { migrate, openDb } from "./db.js";
+import { createMercadoPago } from "./payments.js";
+import { createLocalStorage } from "./providers.js";
+import { createWhatsApp, templateParams } from "./whatsapp.js";
 
-let server, base, db, uploads;
+/* ---------- serviços simulados (nenhuma chamada real a Supabase, Mercado Pago ou Meta) ---------- */
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
 
-async function mkUser(email, role, password = "senha-segura-1") {
-  db.prepare("INSERT INTO users (email,name,role,password_hash,active,created_at) VALUES (?,?,?,?,1,?)").run(
-    email,
-    email.split("@")[0],
-    role,
-    await hashPassword(password),
-    new Date().toISOString(),
+let db, server, base, uploads;
+const accounts = new Map(); // token -> { id, email, name }
+const adminCalls = [];
+const provider = {
+  async getUser(token) {
+    return accounts.get(token) ?? null;
+  },
+  async createUser({ email, name }) {
+    if ([...accounts.values()].some((a) => a.email === email)) throw new HttpError(409, "Já existe uma conta com este e-mail.");
+    const id = crypto.randomUUID();
+    accounts.set(`tok-${id}`, { id, email, name });
+    return { id };
+  },
+  async updateUser(id, attrs) {
+    adminCalls.push([id, attrs]);
+  },
+};
+
+const payments = new Map(); // id -> pagamento do Mercado Pago (simulado)
+const prefs = [];
+let mpFail = false;
+const mp = {
+  enabled: true,
+  verifySignature: () => !mp.rejectSignature,
+  rejectSignature: false,
+  async createPreference(args) {
+    if (mpFail) throw new Error("mp fora do ar");
+    prefs.push(args);
+    return { id: `pref-${args.order.id}`, url: `https://mp.test/pay/${args.order.id}` };
+  },
+  async getPayment(id) {
+    return payments.get(String(id));
+  },
+  async findApprovedPayment(orderId) {
+    return [...payments.values()].find((p) => p.external_reference === String(orderId) && p.status === "approved") ?? null;
+  },
+};
+
+const waSent = [];
+let waFail = false;
+const wa = {
+  enabled: true,
+  async sendOrderPaid(order, items) {
+    if (waFail) throw new Error("meta recusou");
+    waSent.push({ order, items });
+  },
+};
+
+/** Entra como alguém. Papel é definido direto no banco (como faria o script user:add). */
+async function as(email, role = "customer", name = "Pessoa Teste") {
+  let acc = [...accounts.entries()].find(([, a]) => a.email === email);
+  if (!acc) {
+    const id = crypto.randomUUID();
+    accounts.set(`tok-${id}`, { id, email, name });
+    acc = [`tok-${id}`, accounts.get(`tok-${id}`)];
+  }
+  const [token, a] = acc;
+  await db.query(
+    `insert into profiles (id, email, name, role) values ($1,$2,$3,$4) on conflict (id) do update set role = $4, active = true`,
+    [a.id, a.email, a.name, role],
   );
+  return client(token, a.id);
 }
 
-/** Cliente simples com cookie. */
-function client() {
-  let cookie = "";
+function client(token, id) {
   const call = async (method, url, body, headers = {}) => {
+    const isBuf = Buffer.isBuffer(body);
     const res = await fetch(base + url, {
       method,
-      headers: { ...(body && !Buffer.isBuffer(body) ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}), ...headers },
-      body: body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body),
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body !== undefined && !isBuf ? { "Content-Type": "application/json" } : {}), ...headers },
+      body: body === undefined ? undefined : isBuf ? body : JSON.stringify(body),
     });
-    const set = res.headers.get("set-cookie");
-    if (set) cookie = set.split(";")[0];
     const text = await res.text();
-    return { status: res.status, json: text ? JSON.parse(text) : null, headers: res.headers };
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      /* não é JSON */
+    }
+    return { status: res.status, json };
   };
-  return {
-    get: (u) => call("GET", u),
-    post: (u, b, h) => call("POST", u, b ?? {}, h),
-    put: (u, b) => call("PUT", u, b),
-    patch: (u, b) => call("PATCH", u, b),
-    del: (u) => call("DELETE", u),
-  };
+  return { id, get: (u) => call("GET", u), post: (u, b, h) => call("POST", u, b, h), put: (u, b) => call("PUT", u, b), patch: (u, b) => call("PATCH", u, b), del: (u) => call("DELETE", u) };
 }
 
-async function login(email, password = "senha-segura-1") {
-  const c = client();
-  const r = await c.post("/api/auth/login", { email, password });
-  assert.equal(r.status, 200, JSON.stringify(r.json));
-  return c;
-}
-
+const anon = () => client(null);
 const product = (over = {}) => ({ name: "Relógio Teste", description: "d", category: "relogio", priceCents: 10000, stock: 5, ...over });
+const addr = { cep: "01310-100", street: "Av. Paulista", number: "1000", complement: "apto 5", neighborhood: "Bela Vista", city: "São Paulo", state: "SP" };
+const checkoutBody = (items, over = {}) => ({ items, name: "Maria Cliente", phone: "(11) 99999-8888", shipping: addr, ...over });
+const stockOf = async (id) => (await db.query("select stock, variations from products where id = $1", [id])).rows[0];
+const status = async (id) => (await db.query("select * from orders where id = $1", [id])).rows[0];
+
+const approve = (order, over = {}) => {
+  const id = String(Math.floor(Math.random() * 1e9));
+  payments.set(id, { id, status: "approved", external_reference: String(order), transaction_amount: 0, currency_id: "BRL", date_approved: new Date().toISOString(), ...over });
+  return id;
+};
+const hook = (id) => anon().post("/api/payments/webhook", { type: "payment", data: { id } });
 
 before(async () => {
+  db = await openDb({ memory: true });
+  await migrate(db);
   uploads = fs.mkdtempSync(path.join(os.tmpdir(), "kyd-up-"));
-  const made = createApp({ dbPath: ":memory:", uploadsDir: uploads, loginMax: 3 });
-  db = made.db;
-  await mkUser("dono@loja.com", "owner");
-  await mkUser("func@loja.com", "staff");
-  await new Promise((r) => (server = made.app.listen(0, r)));
+  const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", sweepMs: 0 });
+  server = app.listen(0);
   base = `http://127.0.0.1:${server.address().port}`;
 });
-after(() => {
-  server.closeAllConnections();
+after(async () => {
   server.close();
+  await db.close();
   fs.rmSync(uploads, { recursive: true, force: true });
 });
+beforeEach(() => {
+  mpFail = false;
+  waFail = false;
+  mp.rejectSignature = false;
+  waSent.length = 0;
+  prefs.length = 0;
+});
 
-describe("autenticação", () => {
-  it("bloqueia rotas sem login", async () => {
-    const r = await client().get("/api/products");
-    assert.equal(r.status, 401);
+/* ===================================================================== */
+describe("login e papéis", () => {
+  it("sem token ou com token inválido é 401", async () => {
+    assert.equal((await anon().get("/api/me")).status, 401);
+    assert.equal((await anon().get("/api/products")).status, 401);
+    assert.equal((await client("tok-falso").get("/api/products")).status, 401);
   });
-  it("rejeita senha errada com mensagem genérica", async () => {
-    const r = await client().post("/api/auth/login", { email: "dono@loja.com", password: "errada-errada" });
-    assert.equal(r.status, 401);
-    const r2 = await client().post("/api/auth/login", { email: "naoexiste@loja.com", password: "errada-errada" });
-    assert.equal(r2.json.error, r.json.error);
+  it("primeiro acesso cria perfil de cliente; cliente não entra em rotas de colaborador", async () => {
+    const c = await as("cliente1@x.com");
+    const me = await c.get("/api/me");
+    assert.equal(me.status, 200);
+    assert.equal(me.json.user.role, "customer");
+    for (const u of ["/api/products", "/api/orders", "/api/dashboard", "/api/users"]) assert.equal((await c.get(u)).status, 403, u);
+    assert.equal((await c.post("/api/products", product())).status, 403);
   });
-  it("login define cookie httpOnly e /me funciona; logout encerra", async () => {
-    const c = client();
-    const r = await c.post("/api/auth/login", { email: "FUNC@loja.com", password: "senha-segura-1" });
-    assert.equal(r.status, 200);
-    assert.match(r.headers.get("set-cookie"), /HttpOnly/);
-    assert.match(r.headers.get("set-cookie"), /SameSite=Lax/);
-    assert.equal((await c.get("/api/auth/me")).json.user.role, "staff");
-    await c.post("/api/auth/logout");
-    assert.equal((await c.get("/api/auth/me")).status, 401);
+  it("colaborador entra no painel mas não na equipe; conta desativada é barrada", async () => {
+    const s = await as("staff1@x.com", "staff");
+    assert.equal((await s.get("/api/products")).status, 200);
+    assert.equal((await s.get("/api/users")).status, 403);
+    await db.query("update profiles set active = false where id = $1", [s.id]);
+    assert.equal((await s.get("/api/products")).status, 403);
   });
-  it("limita tentativas de login", async () => {
-    const c = client();
-    for (let i = 0; i < 3; i++) await c.post("/api/auth/login", { email: "func@loja.com", password: "x-x-x-x-x-x" });
-    const r = await c.post("/api/auth/login", { email: "func@loja.com", password: "senha-segura-1" });
-    assert.equal(r.status, 429);
-  });
-  it("bloqueia requisição de escrita de outra origem", async () => {
-    const c = await login("dono@loja.com");
-    const r = await c.post("/api/products", product(), { origin: "https://evil.example" });
-    assert.equal(r.status, 403);
+  it("não é possível se promover mandando o campo role no perfil", async () => {
+    const c = await as("cliente2@x.com");
+    await c.put("/api/me", { name: "Eu Mesmo", role: "owner" });
+    assert.equal((await c.get("/api/me")).json.user.role, "customer");
   });
 });
 
-describe("produtos e estoque", () => {
-  it("cria, edita, lista e exclui", async () => {
-    const c = await login("dono@loja.com");
-    const created = await c.post("/api/products", product({ name: "Perfume X", category: "perfume", priceCents: 34990 }));
-    assert.equal(created.status, 201);
-    const id = created.json.product.id;
-    const up = await c.put(`/api/products/${id}`, product({ name: "Perfume Y", category: "outros", priceCents: 30000, promoPriceCents: 25000, stock: 9 }));
-    assert.equal(up.json.product.name, "Perfume Y");
-    assert.equal(up.json.product.category, "outros");
-    assert.equal(up.json.product.promoPriceCents, 25000);
-    assert.ok((await c.get("/api/products")).json.products.some((p) => p.id === id));
-    assert.equal((await c.del(`/api/products/${id}`)).status, 200);
-    assert.equal((await c.del(`/api/products/${id}`)).status, 404);
-  });
-  it("valida categoria, preço e promoção", async () => {
-    const c = await login("func@loja.com", "senha-segura-1").catch(() => null);
-    const owner = c ?? (await login("dono@loja.com"));
-    assert.equal((await owner.post("/api/products", product({ category: "calcado" }))).status, 400);
-    assert.equal((await owner.post("/api/products", product({ priceCents: 10.5 }))).status, 400);
-    assert.equal((await owner.post("/api/products", product({ priceCents: 1000, promoPriceCents: 2000 }))).status, 400);
-    assert.equal((await owner.post("/api/products", product({ name: "  " }))).status, 400);
-  });
-  it("soma estoque das variações", async () => {
-    const c = await login("dono@loja.com");
-    const r = await c.post("/api/products", product({ variations: [{ label: "50 ml", stock: 3 }, { label: "100 ml", stock: 4 }] }));
-    assert.equal(r.json.product.stock, 7);
-    const dup = await c.post("/api/products", product({ variations: [{ label: "A", stock: 1 }, { label: "a", stock: 1 }] }));
-    assert.equal(dup.status, 400);
-  });
-  it("valida e devolve cores (painel e catálogo público)", async () => {
-    const c = await login("dono@loja.com");
-    const ok = await c.post("/api/products", product({ name: "Com cores", colors: [{ name: "Preto", hex: "#000000" }, { name: "Dourado", hex: "#B8935A" }] }));
+describe("produtos e fotos", () => {
+  it("cria, lista, edita, valida e exclui", async () => {
+    const o = await as("dono@x.com", "owner");
+    const ok = await o.post("/api/products", product({ name: "Aurora", variations: [{ label: "50 ml", stock: 3 }, { label: "100 ml", stock: 4 }] }));
     assert.equal(ok.status, 201);
+    assert.equal(ok.json.product.stock, 7);
+    const id = ok.json.product.id;
+    assert.equal((await o.post("/api/products", product({ variations: [{ label: "A", stock: 1 }, { label: "a", stock: 1 }] }))).status, 400);
+    assert.equal((await o.post("/api/products", product({ category: "calcado" }))).status, 400);
+    assert.equal((await o.post("/api/products", product({ priceCents: 10.5 }))).status, 400);
+    assert.equal((await o.post("/api/products", product({ priceCents: 1000, promoPriceCents: 2000 }))).status, 400);
+    assert.equal((await o.post("/api/products", product({ name: "  " }))).status, 400);
+    const up = await o.put(`/api/products/${id}`, product({ name: "Aurora 2", stock: 9 }));
+    assert.equal(up.json.product.name, "Aurora 2");
+    assert.equal((await o.put("/api/products/999999", product())).status, 404);
+    assert.equal((await o.del(`/api/products/${id}`)).status, 200);
+    assert.equal((await o.del(`/api/products/${id}`)).status, 404);
+  });
+  it("valida e devolve cores", async () => {
+    const o = await as("dono@x.com", "owner");
+    const ok = await o.post("/api/products", product({ name: "Com cores", colors: [{ name: "Preto", hex: "#000000" }, { name: "Dourado", hex: "#B8935A" }] }));
     assert.deepEqual(ok.json.product.colors, [{ name: "Preto", hex: "#000000" }, { name: "Dourado", hex: "#b8935a" }]);
-    for (const colors of [[{ name: "X", hex: "red" }], [{ name: "", hex: "#000000" }], [{ name: "A", hex: "#000000" }, { name: "a", hex: "#111111" }], "x"]) {
-      assert.equal((await c.post("/api/products", product({ colors }))).status, 400);
-    }
-    const pub = await (await fetch(base + "/api/catalog")).json();
-    assert.deepEqual(pub.products.find((p) => p.name === "Com cores").colors.map((x) => x.name), ["Preto", "Dourado"]);
-    const sem = await c.post("/api/products", product({ name: "Sem cores" }));
-    assert.deepEqual(sem.json.product.colors, []);
-    await c.put(`/api/products/${ok.json.product.id}`, product({ name: "Com cores", colors: [] }));
-    assert.deepEqual((await c.get("/api/products")).json.products.find((p) => p.id === ok.json.product.id).colors, []);
+    for (const colors of [[{ name: "X", hex: "red" }], [{ name: "", hex: "#000000" }], [{ name: "A", hex: "#000000" }, { name: "a", hex: "#111111" }], "x"])
+      assert.equal((await o.post("/api/products", product({ colors }))).status, 400);
   });
-  it("aceita upload de imagem válida e recusa arquivo falso", async () => {
-    const c = await login("dono@loja.com");
-    const ok = await c.post("/api/uploads", PNG, { "content-type": "image/png" });
-    assert.equal(ok.status, 201);
-    assert.match(ok.json.url, /^\/uploads\/[a-f0-9]{32}\.png$/);
-    const served = await fetch(base + ok.json.url);
-    assert.equal(served.status, 200);
-    const fake = await c.post("/api/uploads", Buffer.from("<script>alert(1)</script>"), { "content-type": "image/png" });
-    assert.equal(fake.status, 415);
-    const wrongType = await c.post("/api/uploads", Buffer.from("<html>"), { "content-type": "text/html" });
-    assert.equal(wrongType.status, 415);
+  it("aceita upload válido, recusa arquivo falso e foto de fora", async () => {
+    const o = await as("dono@x.com", "owner");
+    const okUp = await o.post("/api/uploads", PNG, { "content-type": "image/png" });
+    assert.equal(okUp.status, 201);
+    assert.match(okUp.json.url, /^\/uploads\/[a-f0-9]{32}\.png$/);
+    assert.equal((await o.post("/api/uploads", Buffer.from("<script>alert(1)</script>"), { "content-type": "image/png" })).status, 415);
+    assert.equal((await o.post("/api/uploads", Buffer.from("x"), { "content-type": "text/html" })).status, 415);
+    assert.equal((await o.post("/api/products", product({ photos: ["https://evil.test/x.png"] }))).status, 400);
+    const p = await o.post("/api/products", product({ photos: [okUp.json.url] }));
+    assert.equal(p.status, 201);
+    await o.del(`/api/products/${p.json.product.id}`);
+    assert.equal(fs.existsSync(path.join(uploads, path.basename(okUp.json.url))), false); // foto órfã removida
+    assert.equal((await anon().post("/api/uploads", PNG, { "content-type": "image/png" })).status, 401);
   });
 });
 
 describe("catálogo público", () => {
-  it("é aberto, lista só produtos ativos e não expõe campos internos", async () => {
-    const owner = await login("dono@loja.com");
-    const a = await owner.post("/api/products", product({ name: "Visível", priceCents: 20000, promoPriceCents: 15000, featured: true, photos: [] }));
-    const b = await owner.post("/api/products", product({ name: "Oculto", active: false }));
-    assert.equal(a.status, 201);
-    assert.equal(b.status, 201);
-    const r = await client().get("/api/catalog"); // sem login
+  it("abre sem login, só mostra ativos e não vaza campos internos", async () => {
+    const o = await as("dono@x.com", "owner");
+    await o.post("/api/products", product({ name: "Visível Cat" }));
+    await o.post("/api/products", product({ name: "Oculto Cat", active: false }));
+    const r = await anon().get("/api/catalog");
     assert.equal(r.status, 200);
     const names = r.json.products.map((p) => p.name);
-    assert.ok(names.includes("Visível"));
-    assert.ok(!names.includes("Oculto"));
-    const v = r.json.products.find((p) => p.name === "Visível");
-    assert.equal(v.priceCents, 15000);
-    assert.equal(v.compareAtCents, 20000);
-    assert.equal(v.featured, true);
-    assert.ok(!("active" in v) && !("createdAt" in v) && !("promoPriceCents" in v));
+    assert.ok(names.includes("Visível Cat"));
+    assert.ok(!names.includes("Oculto Cat"));
+    const p = r.json.products.find((x) => x.name === "Visível Cat");
+    for (const k of ["active", "createdAt", "promoPriceCents", "photos"]) assert.ok(!(k in p), k);
+  });
+  it("preço promocional vira preço atual e o original vira 'de'", async () => {
+    const o = await as("dono@x.com", "owner");
+    await o.post("/api/products", product({ name: "Promo Cat", priceCents: 20000, promoPriceCents: 15000 }));
+    const p = (await anon().get("/api/catalog")).json.products.find((x) => x.name === "Promo Cat");
+    assert.equal(p.priceCents, 15000);
+    assert.equal(p.compareAtCents, 20000);
   });
 });
 
-describe("pedidos e dashboard", () => {
-  it("baixa estoque, impede estoque negativo e devolve no cancelamento", async () => {
-    const c = await login("dono@loja.com");
-    const id = (await c.post("/api/products", product({ stock: 3, priceCents: 5000, promoPriceCents: 4000 }))).json.product.id;
-    const o = await c.post("/api/orders", { customerName: "Ana", items: [{ productId: id, qty: 2 }], paid: false });
-    assert.equal(o.status, 201);
-    assert.equal(o.json.order.totalCents, 8000); // usa preço promocional
-    const stockOf = async () => (await c.get("/api/products")).json.products.find((p) => p.id === id).stock;
-    assert.equal(await stockOf(), 1);
-    assert.equal((await c.post("/api/orders", { items: [{ productId: id, qty: 2 }] })).status, 400);
-    assert.equal(await stockOf(), 1);
-    assert.equal((await c.patch(`/api/orders/${o.json.order.id}`, { action: "cancel" })).status, 200);
-    assert.equal(await stockOf(), 3);
-    assert.equal((await c.patch(`/api/orders/${o.json.order.id}`, { action: "pay" })).status, 409);
+/* ===================================================================== */
+describe("checkout (conta obrigatória)", () => {
+  let owner;
+  before(async () => {
+    owner = await as("dono@x.com", "owner");
   });
-  it("exige variação quando o produto tem variações", async () => {
-    const c = await login("dono@loja.com");
-    const id = (await c.post("/api/products", product({ variations: [{ label: "100 ml", stock: 2 }] }))).json.product.id;
-    assert.equal((await c.post("/api/orders", { items: [{ productId: id, qty: 1 }] })).status, 400);
-    const ok = await c.post("/api/orders", { items: [{ productId: id, variation: "100 ml", qty: 2 }], paid: true });
+
+  it("exige login", async () => {
+    assert.equal((await anon().post("/api/checkout", checkoutBody([{ productId: 1, qty: 1 }]))).status, 401);
+  });
+
+  it("cria pedido pendente, reserva estoque e cobra o preço do BANCO, não do navegador", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Checkout A", priceCents: 10000, promoPriceCents: 8000, stock: 5 }))).json.product;
+    const c = await as("cli-a@x.com");
+    const r = await c.post("/api/checkout", { ...checkoutBody([{ productId: p.id, qty: 2, unitPriceCents: 1, priceCents: 1 }]), totalCents: 1 });
+    assert.equal(r.status, 201);
+    assert.equal(r.json.checkoutUrl, `https://mp.test/pay/${r.json.orderId}`);
+    const o = await status(r.json.orderId);
+    assert.equal(o.status, "pending");
+    assert.equal(o.total_cents, 16000); // 2 x 80,00 (promoção do banco)
+    assert.equal(o.source, "site");
+    assert.equal(o.customer_phone, "11999998888");
+    assert.equal((await stockOf(p.id)).stock, 3);
+    assert.equal(prefs[0].items[0].unit, 8000);
+    assert.equal(prefs[0].siteUrl, "https://loja.test");
+    // endereço e telefone ficam salvos no perfil
+    const me = (await c.get("/api/me")).json.user;
+    assert.equal(me.phone, "11999998888");
+    assert.equal(me.address.city, "São Paulo");
+  });
+
+  it("valida endereço, telefone, quantidade e estoque", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Checkout B", stock: 2 }))).json.product;
+    const c = await as("cli-b@x.com");
+    const it = [{ productId: p.id, qty: 1 }];
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { phone: "123" }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { shipping: { ...addr, cep: "123" } }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { shipping: { ...addr, state: "XX" } }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { name: "" }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody([]))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 11 }]))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 3 }]))).status, 400); // só há 2
+    assert.equal((await stockOf(p.id)).stock, 2);
+  });
+
+  it("exige cor e variação quando o produto tem, e baixa a variação certa", async () => {
+    const p = (
+      await owner.post("/api/products", product({ name: "Checkout C", variations: [{ label: "40", stock: 2 }, { label: "41", stock: 0 }], colors: [{ name: "Preto", hex: "#000000" }] }))
+    ).json.product;
+    const c = await as("cli-c@x.com");
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, variation: "40", qty: 1 }]))).status, 400); // sem cor
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, color: "Preto", qty: 1 }]))).status, 400); // sem tamanho
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, color: "Preto", variation: "41", qty: 1 }]))).status, 400); // esgotado
+    const ok = await c.post("/api/checkout", checkoutBody([{ productId: p.id, color: "Preto", variation: "40", qty: 1 }]));
     assert.equal(ok.status, 201);
-    assert.equal((await c.post("/api/orders", { items: [{ productId: id, variation: "100 ml", qty: 1 }] })).status, 400);
+    const s = await stockOf(p.id);
+    assert.deepEqual(s.variations, [{ label: "40", stock: 1 }, { label: "41", stock: 0 }]);
+    assert.equal(s.stock, 1);
   });
-  it("dashboard soma apenas pedidos pagos do período", async () => {
-    const c = await login("dono@loja.com");
-    const id = (await c.post("/api/products", product({ name: "Dash item", stock: 50, priceCents: 1000 }))).json.product.id;
-    const before = (await c.get("/api/dashboard")).json.kpis;
-    await c.post("/api/orders", { items: [{ productId: id, qty: 3 }], paid: true });
-    await c.post("/api/orders", { items: [{ productId: id, qty: 2 }], paid: false });
-    const after = (await c.get("/api/dashboard")).json;
-    assert.equal(after.kpis.revenueCents - before.revenueCents, 3000);
-    assert.equal(after.kpis.orders - before.orders, 1);
-    assert.ok(after.monthly.length === 6);
+
+  it("produto inativo não pode ser comprado", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Checkout D", active: false }))).json.product;
+    assert.equal((await (await as("cli-d@x.com")).post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]))).status, 400);
+  });
+
+  it("se o Mercado Pago falhar, o estoque volta e o pedido é cancelado", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Checkout E", stock: 4 }))).json.product;
+    const c = await as("cli-e@x.com");
+    mpFail = true;
+    const r = await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 2 }]));
+    assert.equal(r.status, 502);
+    assert.equal((await stockOf(p.id)).stock, 4);
+    const { rows } = await db.query("select status from orders where customer_id = $1", [c.id]);
+    assert.deepEqual(rows.map((x) => x.status), ["canceled"]);
+  });
+
+  it("limita pedidos pendentes por pessoa", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Checkout F", stock: 50 }))).json.product;
+    const c = await as("cli-f@x.com");
+    for (let i = 0; i < 3; i++) assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]))).status, 201);
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]))).status, 429);
+  });
+
+  it("sem Mercado Pago configurado, avisa em vez de falhar", async () => {
+    mp.enabled = false;
+    try {
+      assert.equal((await (await as("cli-g@x.com")).post("/api/checkout", checkoutBody([{ productId: 1, qty: 1 }]))).status, 503);
+    } finally {
+      mp.enabled = true;
+    }
+  });
+});
+
+/* ===================================================================== */
+describe("pagamento aprovado → pedido pago + WhatsApp", () => {
+  let owner;
+  before(async () => {
+    owner = await as("dono@x.com", "owner");
+  });
+  const buy = async (email, over = {}) => {
+    const p = (await owner.post("/api/products", product({ name: `Pay ${email}`, priceCents: 25000, stock: 5, ...over }))).json.product;
+    const c = await as(email);
+    const r = await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 2 }]));
+    assert.equal(r.status, 201);
+    return { c, p, orderId: r.json.orderId };
+  };
+
+  it("marca como pago, grava horário e envia o WhatsApp uma única vez", async () => {
+    const { orderId } = await buy("pay1@x.com");
+    const pid = approve(orderId, { transaction_amount: 500 });
+    assert.equal((await hook(pid)).json.result, "paid");
+    const o = await status(orderId);
+    assert.equal(o.status, "paid");
+    assert.ok(o.paid_at);
+    assert.equal(o.payment_id, pid);
+    assert.equal(o.wa_status, "sent");
+    assert.equal(waSent.length, 1);
+    // conteúdo do aviso
+    const params = templateParams(waSent[0].order, waSent[0].items);
+    assert.equal(params[0], String(orderId));
+    assert.equal(params[1], "Maria Cliente");
+    assert.equal(params[2], "11999998888");
+    assert.match(params[3], /R\$\s?500,00/);
+    assert.match(params[4], /2x Pay pay1@x\.com/);
+    assert.match(params[5], /^\d{2}\/\d{2}\/\d{4},? \d{2}:\d{2}$/);
+    assert.match(params[6], /Av\. Paulista, 1000 apto 5 - Bela Vista, São Paulo\/SP, CEP 01310-100/);
+    // aviso repetido do Mercado Pago não duplica nada
+    assert.equal((await hook(pid)).json.result, "already");
+    assert.equal(waSent.length, 1);
+  });
+
+  it("ignora valor diferente, status não aprovado, pedido inexistente e moeda errada", async () => {
+    const { orderId } = await buy("pay2@x.com");
+    assert.equal((await hook(approve(orderId, { transaction_amount: 1 }))).json.result, "ignored");
+    assert.equal((await hook(approve(orderId, { transaction_amount: 500, status: "pending" }))).json.result, "ignored");
+    assert.equal((await hook(approve(orderId, { transaction_amount: 500, currency_id: "USD" }))).json.result, "ignored");
+    assert.equal((await hook(approve(999999, { transaction_amount: 500 }))).json.result, "ignored");
+    assert.equal((await status(orderId)).status, "pending");
+    assert.equal(waSent.length, 0);
+  });
+
+  it("recusa aviso com assinatura inválida e ignora tipos que não são pagamento", async () => {
+    const { orderId } = await buy("pay3@x.com");
+    const pid = approve(orderId, { transaction_amount: 500 });
+    mp.rejectSignature = true;
+    assert.equal((await hook(pid)).status, 401);
+    assert.equal((await status(orderId)).status, "pending");
+    mp.rejectSignature = false;
+    assert.equal((await anon().post("/api/payments/webhook", { type: "merchant_order", data: { id: "1" } })).json.ignored, true);
+  });
+
+  it("aceita o formato antigo (query) do aviso", async () => {
+    const { orderId } = await buy("pay4@x.com");
+    const pid = approve(orderId, { transaction_amount: 500 });
+    const r = await anon().post(`/api/payments/webhook?topic=payment&id=${pid}`, {});
+    assert.equal(r.json.result, "paid");
+  });
+
+  it("se o WhatsApp falhar, o pedido continua pago, fica marcado e o painel reenvia", async () => {
+    const { orderId } = await buy("pay5@x.com");
+    waFail = true;
+    assert.equal((await hook(approve(orderId, { transaction_amount: 500 }))).json.result, "paid");
+    let o = await status(orderId);
+    assert.equal(o.status, "paid");
+    assert.equal(o.wa_status, "failed");
+    assert.match(o.wa_error, /meta recusou/);
+    waFail = false;
+    const r = await owner.patch(`/api/orders/${orderId}`, { action: "resend-whatsapp" });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.order.waStatus, "sent");
+    assert.equal(waSent.length, 1);
+    // cliente não pode reenviar
+    assert.equal((await (await as("pay5@x.com")).patch(`/api/orders/${orderId}`, { action: "resend-whatsapp" })).status, 403);
+  });
+
+  it("a volta do Mercado Pago confere o pagamento sem depender do aviso (sync)", async () => {
+    const { c, orderId } = await buy("pay6@x.com");
+    assert.equal((await c.post(`/api/my/orders/${orderId}/sync`)).json.order.status, "pending");
+    approve(orderId, { transaction_amount: 500 });
+    const r = await c.post(`/api/my/orders/${orderId}/sync`);
+    assert.equal(r.json.order.status, "paid");
+    assert.equal(waSent.length, 1);
+    await c.post(`/api/my/orders/${orderId}/sync`);
+    assert.equal(waSent.length, 1);
+  });
+
+  it("pagamento depois do prazo: reativa se houver estoque", async () => {
+    const { orderId, p } = await buy("pay7@x.com");
+    await db.query("update orders set expires_at = now() - interval '1 minute' where id = $1", [orderId]);
+    await anon().get("/api/catalog"); // varredura de pedidos vencidos
+    assert.equal((await status(orderId)).status, "canceled");
+    assert.equal((await stockOf(p.id)).stock, 5);
+    assert.equal((await hook(approve(orderId, { transaction_amount: 500 }))).json.result, "paid");
+    const o = await status(orderId);
+    assert.equal(o.status, "paid");
+    assert.equal(o.needs_review, false);
+    assert.equal((await stockOf(p.id)).stock, 3);
+  });
+
+  it("pagamento depois do prazo sem estoque: fica pago e marcado para revisão", async () => {
+    const { orderId, p } = await buy("pay8@x.com");
+    await db.query("update orders set expires_at = now() - interval '1 minute' where id = $1", [orderId]);
+    await anon().get("/api/catalog");
+    await db.query("update products set stock = 0 where id = $1", [p.id]);
+    assert.equal((await hook(approve(orderId, { transaction_amount: 500 }))).json.result, "paid");
+    const o = await status(orderId);
+    assert.equal(o.status, "paid");
+    assert.equal(o.needs_review, true);
+    assert.equal((await stockOf(p.id)).stock, 0);
+    const r = await owner.patch(`/api/orders/${orderId}`, { action: "resolve" });
+    assert.equal(r.json.order.needsReview, false);
+  });
+});
+
+describe("expiração e meus pedidos", () => {
+  let owner;
+  before(async () => {
+    owner = await as("dono@x.com", "owner");
+  });
+
+  it("pedido vencido sem pagamento devolve o estoque", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Exp A", stock: 3 }))).json.product;
+    const c = await as("exp-a@x.com");
+    const r = await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 3 }]));
+    assert.equal((await stockOf(p.id)).stock, 0);
+    await db.query("update orders set expires_at = now() - interval '1 second' where id = $1", [r.json.orderId]);
+    await anon().get("/api/catalog");
+    assert.equal((await status(r.json.orderId)).status, "canceled");
+    assert.equal((await stockOf(p.id)).stock, 3);
+  });
+
+  it("cada cliente vê só os próprios pedidos; link de pagamento só enquanto pendente", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Mine A", stock: 9 }))).json.product;
+    const a = await as("mine-a@x.com");
+    const b = await as("mine-b@x.com");
+    const ra = await a.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]));
+    assert.equal((await b.get(`/api/my/orders/${ra.json.orderId}`)).status, 404);
+    assert.equal((await b.post(`/api/my/orders/${ra.json.orderId}/cancel`)).status, 404);
+    assert.equal((await b.post(`/api/my/orders/${ra.json.orderId}/sync`)).status, 404);
+    assert.equal((await b.get("/api/my/orders")).json.orders.length, 0);
+    const mine = (await a.get("/api/my/orders")).json.orders;
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0].paymentUrl, `https://mp.test/pay/${ra.json.orderId}`);
+    assert.ok(!("customerEmail" in mine[0]) && !("waStatus" in mine[0]) && !("paymentId" in mine[0]));
+    assert.ok(mine[0].items.every((i) => !("productId" in i)));
+    const can = await a.post(`/api/my/orders/${ra.json.orderId}/cancel`);
+    assert.equal(can.json.order.status, "canceled");
+    assert.equal(can.json.order.paymentUrl, null);
+    assert.equal((await stockOf(p.id)).stock, 9);
+    assert.equal((await a.post(`/api/my/orders/${ra.json.orderId}/cancel`)).status, 409);
+  });
+
+  it("pedido pago não pode ser cancelado pelo cliente", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Mine B", priceCents: 1000, stock: 9 }))).json.product;
+    const a = await as("mine-c@x.com");
+    const r = await a.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]));
+    await hook(approve(r.json.orderId, { transaction_amount: 10 }));
+    assert.equal((await a.post(`/api/my/orders/${r.json.orderId}/cancel`)).status, 409);
+  });
+});
+
+/* ===================================================================== */
+describe("pedidos do painel e dashboard", () => {
+  let owner;
+  before(async () => {
+    owner = await as("dono@x.com", "owner");
+  });
+
+  it("pedido manual baixa o estoque; cancelar devolve; não paga duas vezes nem cancela duas vezes", async () => {
+    const id = (await owner.post("/api/products", product({ name: "Painel A", stock: 5, priceCents: 1000 }))).json.product.id;
+    const o = await owner.post("/api/orders", { customerName: "João", items: [{ productId: id, qty: 3 }] });
+    assert.equal(o.status, 201);
+    assert.equal(o.json.order.totalCents, 3000);
+    assert.equal(o.json.order.source, "panel");
+    assert.equal((await stockOf(id)).stock, 2);
+    assert.equal((await owner.post("/api/orders", { items: [{ productId: id, qty: 3 }] })).status, 400);
+    const oid = o.json.order.id;
+    assert.equal((await owner.patch(`/api/orders/${oid}`, { action: "pay" })).json.order.status, "paid");
+    assert.equal((await owner.patch(`/api/orders/${oid}`, { action: "pay" })).status, 409);
+    assert.equal((await owner.patch(`/api/orders/${oid}`, { action: "cancel" })).json.order.status, "canceled");
+    assert.equal((await stockOf(id)).stock, 5);
+    assert.equal((await owner.patch(`/api/orders/${oid}`, { action: "cancel" })).status, 409);
+    assert.equal((await owner.patch(`/api/orders/${oid}`, { action: "x" })).status, 400);
+  });
+
+  it("pedido do site não é marcado como pago à mão", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Painel B", stock: 5 }))).json.product;
+    const r = await (await as("painel-b@x.com")).post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]));
+    assert.equal((await owner.patch(`/api/orders/${r.json.orderId}`, { action: "pay" })).status, 409);
+  });
+
+  it("lista pedidos do site com cliente, endereço e status do WhatsApp", async () => {
+    const p = (await owner.post("/api/products", product({ name: "Painel C", priceCents: 700, stock: 5 }))).json.product;
+    const r = await (await as("painel-c@x.com")).post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]));
+    await hook(approve(r.json.orderId, { transaction_amount: 7 }));
+    const list = (await owner.get("/api/orders")).json.orders;
+    const o = list.find((x) => x.id === r.json.orderId);
+    assert.equal(o.source, "site");
+    assert.equal(o.customerEmail, "painel-c@x.com");
+    assert.equal(o.shipping.city, "São Paulo");
+    assert.equal(o.waStatus, "sent");
+    assert.equal(o.status, "paid");
+  });
+
+  it("dashboard soma só pedidos pagos (painel e site) do período", async () => {
+    const id = (await owner.post("/api/products", product({ name: "Dash item", stock: 50, priceCents: 1000 }))).json.product.id;
+    const before = (await owner.get("/api/dashboard")).json.kpis;
+    await owner.post("/api/orders", { items: [{ productId: id, qty: 3 }], paid: true });
+    await owner.post("/api/orders", { items: [{ productId: id, qty: 2 }], paid: false });
+    const site = await (await as("dash@x.com")).post("/api/checkout", checkoutBody([{ productId: id, qty: 1 }]));
+    await hook(approve(site.json.orderId, { transaction_amount: 10 }));
+    const after = (await owner.get("/api/dashboard")).json;
+    assert.equal(after.kpis.revenueCents - before.revenueCents, 4000);
+    assert.equal(after.kpis.orders - before.orders, 2);
+    assert.equal(after.monthly.length, 6);
     assert.ok(after.topProducts.some((p) => p.name === "Dash item" && p.qty >= 3));
-    assert.equal((await c.get("/api/dashboard?from=2026-10-20&to=2026-01-01")).status, 400);
-    assert.equal((await c.get("/api/dashboard?from=lixo&to=2026-01-01")).status, 400);
+    assert.equal((await owner.get("/api/dashboard?from=2026-10-20&to=2026-01-01")).status, 400);
+    assert.equal((await owner.get("/api/dashboard?from=lixo&to=2026-01-01")).status, 400);
   });
 });
 
 describe("equipe", () => {
-  it("colaborador não acessa a equipe; proprietário cria e desativa", async () => {
-    const staff = await login("func@loja.com").catch(() => null);
-    if (staff) assert.equal((await staff.get("/api/users")).status, 403);
-    const owner = await login("dono@loja.com");
-    const r = await owner.post("/api/users", { name: "Novo Colab", email: "novo@loja.com", password: "outra-senha-1", role: "staff" });
+  it("proprietário cria colaborador no Supabase, promove cliente e desativa", async () => {
+    const owner = await as("dono@x.com", "owner");
+    const r = await owner.post("/api/users", { name: "Novo Colab", email: "novo@x.com", password: "outra-senha-1", role: "staff" });
     assert.equal(r.status, 201);
-    assert.equal((await owner.post("/api/users", { name: "Dup", email: "NOVO@loja.com", password: "outra-senha-1", role: "staff" })).status, 409);
-    assert.equal((await owner.post("/api/users", { name: "Fraca", email: "f@loja.com", password: "123", role: "staff" })).status, 400);
-    const novo = await login("novo@loja.com", "outra-senha-1");
+    assert.equal(r.json.user.role, "staff");
+    assert.equal((await owner.post("/api/users", { name: "Dup", email: "NOVO@x.com", password: "outra-senha-1", role: "staff" })).status, 409);
+    assert.equal((await owner.post("/api/users", { name: "Fraca", email: "f@x.com", password: "123", role: "staff" })).status, 400);
+    assert.equal((await owner.post("/api/users", { name: "SemSenha", email: "semsenha@x.com", role: "staff" })).status, 400);
+
+    // cliente que já tem conta é promovido, não duplicado
+    await (await as("cliente-promo@x.com")).get("/api/me");
+    const promo = await owner.post("/api/users", { name: "Cliente Promo", email: "cliente-promo@x.com", role: "staff" });
+    assert.equal(promo.status, 200);
+    assert.equal(promo.json.user.role, "staff");
+
+    const novo = client(`tok-${r.json.user.id}`);
+    assert.equal((await novo.get("/api/products")).status, 200);
+    adminCalls.length = 0;
     assert.equal((await owner.patch(`/api/users/${r.json.user.id}`, { active: false })).status, 200);
-    assert.equal((await novo.get("/api/auth/me")).status, 401); // sessão derrubada
-    const retry = await client().post("/api/auth/login", { email: "novo@loja.com", password: "outra-senha-1" });
-    assert.equal(retry.status, 401);
+    assert.deepEqual(adminCalls[0], [r.json.user.id, { banned: true }]);
+    assert.equal((await novo.get("/api/products")).status, 403);
+    assert.equal((await owner.patch(`/api/users/${r.json.user.id}`, { password: "nova-senha-123" })).status, 200);
+    assert.deepEqual(adminCalls.at(-1), [r.json.user.id, { password: "nova-senha-123" }]);
+    const list = (await owner.get("/api/users")).json.users;
+    assert.ok(list.every((u) => ["staff", "owner"].includes(u.role)));
   });
-  it("proprietário não pode desativar a si mesmo", async () => {
-    const owner = await login("dono@loja.com");
-    const me = (await owner.get("/api/auth/me")).json.user;
-    assert.equal((await owner.patch(`/api/users/${me.id}`, { active: false })).status, 400);
+  it("proprietário não pode desativar nem rebaixar a si mesmo; id inválido é 404", async () => {
+    const owner = await as("dono@x.com", "owner");
+    assert.equal((await owner.patch(`/api/users/${owner.id}`, { active: false })).status, 400);
+    assert.equal((await owner.patch(`/api/users/${owner.id}`, { role: "staff" })).status, 400);
+    assert.equal((await owner.patch("/api/users/abc", { active: false })).status, 404);
+  });
+});
+
+/* ===================================================================== */
+describe("Mercado Pago (cliente)", () => {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
+    return { ok: true, status: 200, json: async () => ({ id: "pref1", init_point: "https://mp.test/checkout/pref1" }) };
+  };
+  const order = { id: 42 };
+  const items = [{ productId: 1, name: "Aurora", variation: "42", color: "Preto", qty: 2, unit: 12345 }];
+
+  it("monta a preferência em reais, com referência do pedido e prazo", async () => {
+    const client_ = createMercadoPago({ accessToken: "TOKEN", fetchImpl: fakeFetch });
+    calls.length = 0;
+    const out = await client_.createPreference({ order, items, payer: { name: "Ana", email: "a@x.com" }, siteUrl: "https://loja.test", expiresAt: new Date("2026-10-21T15:30:00Z") });
+    assert.deepEqual(out, { id: "pref1", url: "https://mp.test/checkout/pref1" });
+    const c = calls[0];
+    assert.equal(c.url, "https://api.mercadopago.com/checkout/preferences");
+    assert.equal(c.init.headers.Authorization, "Bearer TOKEN");
+    assert.equal(c.body.external_reference, "42");
+    assert.equal(c.body.items[0].unit_price, 123.45);
+    assert.equal(c.body.items[0].quantity, 2);
+    assert.equal(c.body.items[0].currency_id, "BRL");
+    assert.equal(c.body.items[0].title, "Aurora - 42 - Preto");
+    assert.equal(c.body.notification_url, "https://loja.test/api/payments/webhook");
+    assert.equal(c.body.auto_return, "approved");
+    assert.equal(c.body.expiration_date_to, "2026-10-21T12:30:00.000-03:00");
+  });
+  it("em http (desenvolvimento) não envia webhook nem retorno automático", async () => {
+    const client_ = createMercadoPago({ accessToken: "T", fetchImpl: fakeFetch });
+    calls.length = 0;
+    await client_.createPreference({ order, items, payer: {}, siteUrl: "http://localhost:5173", expiresAt: new Date() });
+    assert.equal(calls[0].body.notification_url, undefined);
+    assert.equal(calls[0].body.auto_return, undefined);
+  });
+  it("confere a assinatura x-signature", () => {
+    const secret = "segredo";
+    const m = createMercadoPago({ accessToken: "T", webhookSecret: secret });
+    const ts = "1700000000";
+    const v1 = crypto.createHmac("sha256", secret).update(`id:abc123;request-id:req-1;ts:${ts};`).digest("hex");
+    assert.equal(m.verifySignature({ signature: `ts=${ts},v1=${v1}`, requestId: "req-1", dataId: "ABC123" }), true);
+    assert.equal(m.verifySignature({ signature: `ts=${ts},v1=${v1}`, requestId: "req-2", dataId: "abc123" }), false);
+    assert.equal(m.verifySignature({ signature: "lixo", requestId: "req-1", dataId: "abc123" }), false);
+    assert.equal(m.verifySignature({ requestId: "req-1", dataId: "abc123" }), false);
+  });
+  it("erro do Mercado Pago vira exceção", async () => {
+    const m = createMercadoPago({ accessToken: "T", fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ message: "invalid" }) }) });
+    await assert.rejects(() => m.getPayment("1"), /invalid/);
+  });
+});
+
+describe("WhatsApp Cloud API (cliente)", () => {
+  it("envia o modelo com os 7 parâmetros, sem quebras de linha", async () => {
+    let sent;
+    const w = createWhatsApp({
+      token: "WTOKEN",
+      phoneNumberId: "1234",
+      to: "+55 (11) 98888-7777",
+      template: "pedido_pago",
+      fetchImpl: async (url, init) => {
+        sent = { url, init, body: JSON.parse(init.body) };
+        return { ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid" }] }) };
+      },
+    });
+    assert.equal(w.enabled, true);
+    const order = { id: 7, customer_name: "Ana\nSilva", customer_phone: "11999998888", total_cents: 123456, paid_at: "2026-10-21T15:30:00Z", shipping: { street: "Rua A", number: "1", neighborhood: "Centro", city: "Recife", state: "PE", cep: "50000000" } };
+    await w.sendOrderPaid(order, [{ qty: 2, name: "Aurora", variation: "", color: "Preto" }, { qty: 1, name: "Noir", variation: "100 ml", color: "" }]);
+    assert.equal(sent.url, "https://graph.facebook.com/v21.0/1234/messages");
+    assert.equal(sent.init.headers.Authorization, "Bearer WTOKEN");
+    assert.equal(sent.body.to, "5511988887777");
+    assert.equal(sent.body.template.name, "pedido_pago");
+    assert.equal(sent.body.template.language.code, "pt_BR");
+    const texts = sent.body.template.components[0].parameters.map((p) => p.text);
+    assert.equal(texts.length, 7);
+    assert.equal(texts[1], "Ana Silva");
+    assert.match(texts[3], /R\$\s?1\.234,56/);
+    assert.equal(texts[4], "2x Aurora (Preto); 1x Noir (100 ml)");
+    assert.match(texts[5], /^21\/10\/2026,? 12:30$/); // horário de Brasília
+    assert.equal(texts[6], "Rua A, 1 - Centro, Recife/PE, CEP 50000-000");
+    assert.ok(texts.every((t) => !/[\n\t]/.test(t) && !/ {5,}/.test(t)));
+  });
+  it("sem configuração fica desligado e erro da Meta vira exceção", async () => {
+    assert.equal(createWhatsApp({}).enabled, false);
+    const w = createWhatsApp({ token: "t", phoneNumberId: "1", to: "5511", template: "x", fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ error: { message: "template inexistente" } }) }) });
+    await assert.rejects(() => w.sendOrderPaid({ id: 1, shipping: null }, []), /template inexistente/);
   });
 });
 
 describe("cálculo do dashboard", () => {
-  it("agrupa por mês local, preenche meses vazios e calcula variação", () => {
+  it("agrupa por mês local, preenche meses vazios e calcula variação", async () => {
     const paid = [
       { paid_at: "2026-08-10T15:00:00.000Z", total_cents: 10000 },
       { paid_at: "2026-10-05T15:00:00.000Z", total_cents: 15000 },
       { paid_at: "2026-10-06T15:00:00.000Z", total_cents: 5000 },
       { paid_at: "2026-11-01T01:00:00.000Z", total_cents: 7000 }, // 31/10 22h no fuso da loja → outubro
     ];
-    const inRange = (a, b) => paid.filter((o) => o.paid_at >= a && o.paid_at < b);
-    const d = buildDashboard({ from: "2026-08-01", to: "2026-10-31" }, inRange, () => []);
+    const inRange = async (a, b) => paid.filter((o) => o.paid_at >= a && o.paid_at < b);
+    const d = await buildDashboard({ from: "2026-08-01", to: "2026-10-31" }, inRange, async () => []);
     assert.deepEqual(
       d.monthly.map((m) => [m.month, m.revenueCents]),
       [["2026-08", 10000], ["2026-09", 0], ["2026-10", 27000]],
@@ -257,7 +686,7 @@ describe("cálculo do dashboard", () => {
     assert.equal(d.kpis.orders, 4);
     assert.equal(d.kpis.avgTicketCents, 9250);
     assert.equal(d.comparative[1].deltaPct, -100);
-    assert.equal(d.comparative[2].deltaPct, null); // mês anterior sem vendas
+    assert.equal(d.comparative[2].deltaPct, null);
     assert.equal(d.compare.currentCents, 27000);
     assert.equal(d.compare.previousCents, 0);
   });

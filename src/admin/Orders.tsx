@@ -26,12 +26,20 @@ export function Orders() {
     void load();
   }, [load]);
 
-  const act = async (o: Order, action: "pay" | "cancel") => {
+  const act = async (o: Order, action: "pay" | "cancel" | "resend-whatsapp" | "resolve") => {
     setBusy(true);
     setError("");
     try {
       await api.orderAction(o.id, action);
-      setNotice(action === "pay" ? `Pedido #${o.id} marcado como pago.` : `Pedido #${o.id} cancelado e itens devolvidos ao estoque.`);
+      setNotice(
+        action === "pay"
+          ? `Pedido #${o.id} marcado como pago.`
+          : action === "cancel"
+            ? `Pedido #${o.id} cancelado e itens devolvidos ao estoque.`
+            : action === "resolve"
+              ? `Pedido #${o.id} marcado como conferido.`
+              : `WhatsApp do pedido #${o.id} reenviado.`,
+      );
       setToCancel(null);
       await load();
     } catch (e) {
@@ -62,7 +70,7 @@ export function Orders() {
           Novo pedido
         </button>
       </header>
-      <p className="adm-muted">Registre aqui os pedidos confirmados (por exemplo, pelo WhatsApp). Só pedidos pagos entram no faturamento.</p>
+      <p className="adm-muted">Pedidos pagos no site entram aqui sozinhos. Você também pode registrar pedidos feitos por outros meios. Só pedidos pagos entram no faturamento.</p>
 
       {notice && (
         <p className="adm-notice" role="status">
@@ -97,13 +105,39 @@ export function Orders() {
                   <li key={i}>
                     <span>
                       {it.qty} × {it.name}
-                      {it.variation && ` (${it.variation})`}
+                      {(it.variation || it.color) && ` (${[it.variation, it.color].filter(Boolean).join(", ")})`}
                     </span>
                     <span>{formatBRL(it.qty * it.unitPriceCents)}</span>
                   </li>
                 ))}
               </ul>
               {o.note && <p className="adm-muted">Obs.: {o.note}</p>}
+              {o.source === "site" && (
+                <div className="adm-muted">
+                  <p>
+                    Pedido do site · {o.customerEmail}
+                    {o.customerPhone && ` · ${o.customerPhone}`}
+                    {o.paymentId && ` · Pagamento MP ${o.paymentId}`}
+                  </p>
+                  {o.shipping && (
+                    <p>
+                      Entrega: {o.shipping.street}, {o.shipping.number}
+                      {o.shipping.complement && ` — ${o.shipping.complement}`} · {o.shipping.neighborhood} · {o.shipping.city}/{o.shipping.state} · CEP{" "}
+                      {o.shipping.cep}
+                    </p>
+                  )}
+                  {o.status === "paid" && (
+                    <p>
+                      WhatsApp da loja: {o.waStatus === "sent" ? "enviado" : o.waStatus === "failed" ? `falhou${o.waError ? ` (${o.waError})` : ""}` : "não enviado"}
+                    </p>
+                  )}
+                  {o.needsReview && (
+                    <p className="adm-error" role="alert">
+                      Atenção: pagamento recebido depois da reserva expirar e o estoque não pôde ser reservado de novo. Confira e resolva (estoque/reembolso).
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="adm-order__foot">
                 <span className="adm-muted">
                   {fmtDate(o.createdAt)}
@@ -111,16 +145,28 @@ export function Orders() {
                 </span>
                 <strong>{formatBRL(o.totalCents)}</strong>
               </div>
-              {o.status !== "canceled" && (
+              {(o.status !== "canceled" || o.needsReview) && (
                 <div className="adm-actions">
-                  {o.status === "pending" && (
+                  {o.source === "site" && o.status === "paid" && o.waStatus !== "sent" && (
+                    <button className="adm-btn adm-btn--sm" disabled={busy} onClick={() => act(o, "resend-whatsapp")}>
+                      Reenviar WhatsApp
+                    </button>
+                  )}
+                  {o.needsReview && (
+                    <button className="adm-btn adm-btn--sm" disabled={busy} onClick={() => act(o, "resolve")}>
+                      Marcar como conferido
+                    </button>
+                  )}
+                  {o.status === "pending" && o.source === "panel" && (
                     <button className="adm-btn adm-btn--sm adm-btn--primary" disabled={busy} onClick={() => act(o, "pay")}>
                       Marcar como pago
                     </button>
                   )}
-                  <button className="adm-btn adm-btn--sm adm-btn--danger" disabled={busy} onClick={() => setToCancel(o)}>
-                    Cancelar pedido
-                  </button>
+                  {o.status !== "canceled" && (
+                    <button className="adm-btn adm-btn--sm adm-btn--danger" disabled={busy} onClick={() => setToCancel(o)}>
+                      Cancelar pedido
+                    </button>
+                  )}
                 </div>
               )}
             </li>

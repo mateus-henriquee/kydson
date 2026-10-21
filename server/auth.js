@@ -1,10 +1,3 @@
-import crypto from "node:crypto";
-import { promisify } from "node:util";
-
-const scrypt = promisify(crypto.scrypt);
-const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
-export const COOKIE = "kyd_sid";
-
 export class HttpError extends Error {
   constructor(status, message) {
     super(message);
@@ -12,126 +5,58 @@ export class HttpError extends Error {
   }
 }
 
-/* ---------- senhas ---------- */
-export async function hashPassword(password) {
-  const salt = crypto.randomBytes(16);
-  const hash = await scrypt(password, salt, 64);
-  return `scrypt$${salt.toString("base64")}$${hash.toString("base64")}`;
-}
+export const STAFF_ROLES = ["staff", "owner"];
 
-// Hash descartável: faz o tempo de resposta ser parecido quando o e-mail não existe.
-let dummy;
-export async function verifyPassword(password, stored) {
-  if (!stored) {
-    dummy ??= await hashPassword("dummy-password");
-    stored = dummy;
-    await verifyPassword(password, stored);
-    return false;
-  }
-  const [scheme, saltB64, hashB64] = stored.split("$");
-  if (scheme !== "scrypt" || !saltB64 || !hashB64) return false;
-  const expected = Buffer.from(hashB64, "base64");
-  const actual = await scrypt(password, Buffer.from(saltB64, "base64"), expected.length);
-  return crypto.timingSafeEqual(actual, expected);
-}
-
-/* ---------- sessões ---------- */
-const sha = (t) => crypto.createHash("sha256").update(t).digest("hex");
-
-export function createSession(db, userId) {
-  const token = crypto.randomBytes(32).toString("base64url");
-  db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(Date.now());
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?,?,?)").run(
-    sha(token),
-    userId,
-    Date.now() + SESSION_TTL_MS,
-  );
-  return token;
-}
-
-export function destroySession(db, token) {
-  if (token) db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha(token));
-}
-
-export function destroyUserSessions(db, userId) {
-  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
-}
-
-export function userFromToken(db, token) {
-  if (!token) return null;
-  const row = db
-    .prepare(
-      `SELECT u.id, u.email, u.name, u.role FROM sessions s
-       JOIN users u ON u.id = s.user_id
-       WHERE s.token_hash = ? AND s.expires_at > ? AND u.active = 1`,
-    )
-    .get(sha(token), Date.now());
-  return row ?? null;
-}
-
-export function readCookie(req, name) {
-  const header = req.headers.cookie;
-  if (!header) return null;
-  for (const part of header.split(";")) {
-    const i = part.indexOf("=");
-    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
-  }
-  return null;
-}
-
-export function sessionCookie(token, secure) {
-  const maxAge = token ? Math.floor(SESSION_TTL_MS / 1000) : 0;
-  return `${COOKIE}=${token ?? ""}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
-}
-
-/* ---------- middlewares ---------- */
-export const requireAuth = (db) => (req, _res, next) => {
-  const user = userFromToken(db, readCookie(req, COOKIE));
-  if (!user) return next(new HttpError(401, "Faça login para continuar."));
-  req.user = user;
-  next();
-};
-
-export const requireOwner = (req, _res, next) =>
-  req.user?.role === "owner" ? next() : next(new HttpError(403, "Apenas o proprietário pode fazer isso."));
-
-/** Bloqueia POST/PUT/PATCH/DELETE vindos de outra origem (CSRF). */
-export function originCheck(req, _res, next) {
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  const origin = req.headers.origin;
-  if (origin) {
-    let host;
-    try {
-      host = new URL(origin).host;
-    } catch {
-      return next(new HttpError(403, "Origem inválida."));
-    }
-    if (host !== req.headers.host) return next(new HttpError(403, "Origem não permitida."));
-  }
-  next();
-}
-
-/* ---------- limite de tentativas de login ---------- */
-export function createLoginLimiter({ max = 5, windowMs = 10 * 60 * 1000 } = {}) {
-  const hits = new Map();
-  const prune = (now) => {
-    for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+/**
+ * Login é do Supabase Auth: o navegador entra e recebe um token; a API só confere esse token.
+ * `provider.getUser(token)` → { id, email, name } | null   (veja providers.js)
+ */
+export function createAuth({ db, provider }) {
+  const bearer = (req) => {
+    const h = req.headers.authorization;
+    return typeof h === "string" && h.startsWith("Bearer ") ? h.slice(7).trim() : null;
   };
+
+  async function load(req) {
+    const token = bearer(req);
+    if (!token) throw new HttpError(401, "Faça login para continuar.");
+    let u;
+    try {
+      u = await provider.getUser(token);
+    } catch {
+      throw new HttpError(503, "Não foi possível verificar o login agora. Tente de novo.");
+    }
+    if (!u) throw new HttpError(401, "Sessão expirada. Entre novamente.");
+    // Primeiro acesso = perfil de cliente. Papel (colaborador/dono) nunca é alterado aqui.
+    const { rows } = await db.query(
+      `insert into profiles (id, email, name) values ($1, $2, $3)
+       on conflict (id) do update set email = excluded.email
+       returning id, email, name, phone, address, role, active`,
+      [u.id, u.email ?? "", u.name ?? ""],
+    );
+    const p = rows[0];
+    if (!p.active) throw new HttpError(403, "Esta conta está desativada.");
+    return p;
+  }
+
+  const wrap = (fn) => async (req, _res, next) => {
+    try {
+      req.user = await load(req);
+      fn?.(req);
+      next();
+    } catch (e) {
+      next(e);
+    }
+  };
+
   return {
-    blocked(key) {
-      const now = Date.now();
-      prune(now);
-      const h = hits.get(key);
-      return !!h && h.count >= max && h.reset > now;
-    },
-    fail(key) {
-      const now = Date.now();
-      const h = hits.get(key);
-      if (!h || h.reset < now) hits.set(key, { count: 1, reset: now + windowMs });
-      else h.count += 1;
-    },
-    clear(key) {
-      hits.delete(key);
-    },
+    /** Qualquer pessoa logada (cliente, colaborador ou dono). */
+    user: wrap(),
+    staff: wrap((req) => {
+      if (!STAFF_ROLES.includes(req.user.role)) throw new HttpError(403, "Acesso restrito a colaboradores.");
+    }),
+    owner: wrap((req) => {
+      if (req.user.role !== "owner") throw new HttpError(403, "Apenas o proprietário pode fazer isso.");
+    }),
   };
 }

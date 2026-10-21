@@ -40,7 +40,7 @@ export type ProductInput = Omit<AdminProduct, "id">;
 export type Role = "owner" | "staff";
 
 export interface SessionUser {
-  id: number;
+  id: string;
   name: string;
   email: string;
   role: Role;
@@ -56,18 +56,38 @@ export interface OrderItem {
   productId: number | null;
   name: string;
   variation: string;
+  color: string;
   qty: number;
   unitPriceCents: number;
 }
 
+export interface OrderShipping {
+  cep: string;
+  street: string;
+  number: string;
+  complement: string;
+  neighborhood: string;
+  city: string;
+  state: string;
+}
+
 export interface Order {
   id: number;
+  source: "panel" | "site";
   customerName: string;
+  customerEmail: string | null;
+  customerPhone: string | null;
+  shipping: OrderShipping | null;
   note: string;
   status: OrderStatus;
   totalCents: number;
   createdAt: string;
   paidAt: string | null;
+  expiresAt: string | null;
+  paymentId: string | null;
+  waStatus: "sent" | "failed" | null;
+  waError: string | null;
+  needsReview: boolean;
   createdByName: string | null;
   items: OrderItem[];
 }

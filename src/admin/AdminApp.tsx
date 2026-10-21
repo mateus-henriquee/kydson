@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import "./admin.css";
-import { api, setUnauthorizedHandler } from "./api";
+import { AuthProvider, useAuth } from "../state/AuthContext";
 import type { SessionUser } from "./types";
 import { Login } from "./Login";
 import { Shell, type Route } from "./Shell";
@@ -17,9 +17,8 @@ function routeFromPath(path: string): Route {
   return (Object.keys(PATHS) as Route[]).find((r) => PATHS[r] === clean) ?? "dashboard";
 }
 
-export default function AdminApp() {
-  const [user, setUser] = useState<SessionUser | null>(null);
-  const [checking, setChecking] = useState(true);
+function Inner() {
+  const auth = useAuth();
   const [route, setRoute] = useState<Route>(() => routeFromPath(window.location.pathname));
 
   useEffect(() => {
@@ -34,15 +33,6 @@ export default function AdminApp() {
   }, []);
 
   useEffect(() => {
-    setUnauthorizedHandler(() => setUser(null));
-    api
-      .me()
-      .then((r) => setUser(r.user))
-      .catch(() => setUser(null))
-      .finally(() => setChecking(false));
-  }, []);
-
-  useEffect(() => {
     const onPop = () => setRoute(routeFromPath(window.location.pathname));
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -54,15 +44,36 @@ export default function AdminApp() {
     window.scrollTo(0, 0);
   }, []);
 
-  const logout = useCallback(async () => {
-    await api.logout().catch(() => {});
-    setUser(null);
-  }, []);
+  if (auth.status === "loading") return <div className="adm adm-loading">Carregando…</div>;
+  if (!auth.user) return <Login />;
 
-  if (checking) return <div className="adm adm-loading">Carregando…</div>;
-  if (!user) return <Login onLogin={setUser} />;
+  // Cliente comum não entra no painel.
+  if (auth.user.role === "customer") {
+    return (
+      <div className="adm adm-loading">
+        <p>Esta conta não tem acesso ao painel.</p>
+        <p>
+          <button className="adm-btn" onClick={() => void auth.signOut()}>
+            Sair
+          </button>{" "}
+          <a className="adm-back" href="/">
+            ← Voltar ao site
+          </a>
+        </p>
+      </div>
+    );
+  }
 
+  const user: SessionUser = { id: auth.user.id, name: auth.user.name, email: auth.user.email, role: auth.user.role };
   // Rota restrita: colaborador comum não acessa Equipe.
   const effective: Route = route === "equipe" && user.role !== "owner" ? "dashboard" : route;
-  return <Shell user={user} route={effective} go={go} onLogout={logout} />;
+  return <Shell user={user} route={effective} go={go} onLogout={() => void auth.signOut()} />;
+}
+
+export default function AdminApp() {
+  return (
+    <AuthProvider>
+      <Inner />
+    </AuthProvider>
+  );
 }

@@ -1,35 +1,10 @@
-import type { AdminProduct, DashboardData, Order, ProductInput, Role, SessionUser, TeamUser } from "./types";
+import type { AdminProduct, DashboardData, Order, ProductInput, Role, TeamUser } from "./types";
+import { ApiError, request as http } from "../lib/http";
 
-export class ApiError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-let onUnauthorized: () => void = () => {};
-export const setUnauthorizedHandler = (fn: () => void) => {
-  onUnauthorized = fn;
-};
+export { ApiError };
 
 async function request<T>(method: string, url: string, body?: unknown, contentType?: string): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      credentials: "same-origin",
-      headers: body === undefined ? undefined : { "Content-Type": contentType ?? "application/json" },
-      body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError(0, "Sem conexão com o servidor.");
-  }
-  const data = (await res.json().catch(() => null)) as { error?: string } | null;
-  if (!res.ok) {
-    if (res.status === 401 && !url.startsWith("/api/auth/")) onUnauthorized();
-    throw new ApiError(res.status, data?.error ?? "Algo deu errado. Tente novamente.");
-  }
+  const data = await http<T>(method, url, body, contentType);
   // Avisa abas abertas do site que o catálogo mudou (atualiza sem recarregar).
   if (method !== "GET" && (url.startsWith("/api/products") || url.startsWith("/api/orders"))) {
     try {
@@ -38,14 +13,10 @@ async function request<T>(method: string, url: string, body?: unknown, contentTy
       /* ignora */
     }
   }
-  return data as T;
+  return data;
 }
 
 export const api = {
-  me: () => request<{ user: SessionUser }>("GET", "/api/auth/me"),
-  login: (email: string, password: string) => request<{ user: SessionUser }>("POST", "/api/auth/login", { email, password }),
-  logout: () => request<{ ok: true }>("POST", "/api/auth/logout", {}),
-
   dashboard: (from: string, to: string) => request<DashboardData>("GET", `/api/dashboard?from=${from}&to=${to}`),
 
   products: () => request<{ products: AdminProduct[] }>("GET", "/api/products"),
@@ -61,11 +32,11 @@ export const api = {
     paid: boolean;
     items: { productId: number; variation: string; qty: number }[];
   }) => request<{ order: Order }>("POST", "/api/orders", o),
-  orderAction: (id: number, action: "pay" | "cancel") => request<{ order: Order }>("PATCH", `/api/orders/${id}`, { action }),
+  orderAction: (id: number, action: "pay" | "cancel" | "resend-whatsapp" | "resolve") => request<{ order: Order }>("PATCH", `/api/orders/${id}`, { action }),
 
   users: () => request<{ users: TeamUser[] }>("GET", "/api/users"),
-  createUser: (u: { name: string; email: string; password: string; role: Role }) =>
+  createUser: (u: { name: string; email: string; password?: string; role: Role }) =>
     request<{ user: TeamUser }>("POST", "/api/users", u),
-  updateUser: (id: number, patch: Partial<{ name: string; role: Role; active: boolean; password: string }>) =>
+  updateUser: (id: string, patch: Partial<{ name: string; role: Role; active: boolean; password: string }>) =>
     request<{ user: TeamUser }>("PATCH", `/api/users/${id}`, patch),
 };

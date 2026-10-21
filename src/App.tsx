@@ -1,3 +1,4 @@
+import { AuthProvider } from "./state/AuthContext";
 import { CartProvider } from "./state/CartContext";
 import { CatalogProvider } from "./state/CatalogContext";
 import { useScrollProgress } from "./hooks/useScrollProgress";
@@ -12,6 +13,11 @@ import { Footer } from "./components/Footer";
 import { CartDrawer } from "./components/CartDrawer";
 import { CatalogPage } from "./components/CatalogPage";
 import { ProductPage } from "./components/ProductPage";
+import { AuthPage } from "./pages/AuthPage";
+import { AccountPage } from "./pages/AccountPage";
+import { CheckoutPage } from "./pages/CheckoutPage";
+import { OrderPage } from "./pages/OrderPage";
+import { WhatsAppFab } from "./components/WhatsAppFab";
 import { Link, parseRoute, usePathname } from "./lib/router";
 
 /** Fundo fixo que acompanha o scroll via --p (CSS). */
@@ -47,6 +53,7 @@ export default function App() {
   useScrollProgress();
   const route = parseRoute(usePathname());
   return (
+    <AuthProvider>
     <CatalogProvider>
       <CartProvider>
       <a className="skip" href="#conteudo">
@@ -68,11 +75,17 @@ export default function App() {
         )}
         {route.name === "catalog" && <CatalogPage category={route.category} />}
         {route.name === "product" && <ProductPage id={route.id} />}
+        {route.name === "login" && <AuthPage />}
+        {route.name === "account" && <AccountPage />}
+        {route.name === "checkout" && <CheckoutPage />}
+        {route.name === "order" && <OrderPage id={route.id} />}
         {route.name === "notfound" && <NotFound />}
       </main>
       <Footer />
       <CartDrawer />
+      <WhatsAppFab />
       </CartProvider>
     </CatalogProvider>
+    </AuthProvider>
   );
 }

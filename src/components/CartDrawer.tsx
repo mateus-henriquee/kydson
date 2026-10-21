@@ -3,10 +3,12 @@ import { STORE } from "../config/store";
 import { formatBRL } from "../lib/money";
 import { buildOrderMessage, buildWhatsAppUrl, normalizePhone } from "../lib/whatsapp";
 import { Link } from "../lib/router";
+import { useAuth } from "../state/AuthContext";
 import { useCart } from "../state/CartContext";
 
 export function CartDrawer() {
   const { open, setOpen, lines, totalCents, setQty, remove, clear } = useCart();
+  const { user, configured } = useAuth();
   const closeRef = useRef<HTMLButtonElement>(null);
   const lastFocus = useRef<HTMLElement | null>(null);
 
@@ -80,17 +82,17 @@ export function CartDrawer() {
                 <span>Subtotal</span>
                 <strong>{formatBRL(totalCents)}</strong>
               </div>
-              <p className="drawer__note">Frete, disponibilidade e pagamento são combinados no atendimento.</p>
+              <p className="drawer__note">
+                {user ? "Você paga com segurança pelo Mercado Pago." : "Para pagar é preciso criar uma conta (leva 1 minuto)."}
+              </p>
 
-              {url ? (
-                <a className="btn btn--block" href={url} target="_blank" rel="noopener noreferrer">
-                  Continuar pelo WhatsApp
+              <Link className="btn btn--block" to="/finalizar" onClick={() => setOpen(false)}>
+                {user || !configured ? "Finalizar compra" : "Entrar e finalizar"}
+              </Link>
+              {url && (
+                <a className="btn btn--ghost btn--block" href={url} target="_blank" rel="noopener noreferrer">
+                  Combinar pelo WhatsApp
                 </a>
-              ) : (
-                <p className="notice" role="alert">
-                  Configuração pendente: o número oficial do WhatsApp ainda não foi definido (VITE_WHATSAPP_NUMBER). Por isso o envio está
-                  desativado.
-                </p>
               )}
               <button className="link" onClick={clear}>
                 Esvaziar carrinho

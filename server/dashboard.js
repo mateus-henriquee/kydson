@@ -59,11 +59,11 @@ export function parseRange(from, to, now = new Date()) {
  * fetchPaid(fromIso, toIsoExclusive) → [{ paid_at, total_cents }]
  * fetchItems(fromIso, toIsoExclusive) → [{ name, qty, revenue_cents }] (já agrupado)
  */
-export function buildDashboard({ from, to }, fetchPaid, fetchItems) {
+export async function buildDashboard({ from, to }, fetchPaid, fetchItems) {
   const fromIso = startOfLocalDay(from);
   const toIso = startOfLocalDay(nextDay(to));
 
-  const orders = fetchPaid(fromIso, toIso);
+  const orders = await fetchPaid(fromIso, toIso);
   const revenueCents = orders.reduce((s, o) => s + o.total_cents, 0);
 
   // Meses do período (inclui meses sem venda).
@@ -89,12 +89,12 @@ export function buildDashboard({ from, to }, fetchPaid, fetchItems) {
   // Mês final do período × mês anterior (meses completos, mesmo fora do período).
   const curKey = endKey;
   const prevKey = shiftMonth(curKey, -1);
-  const monthSum = (key) => {
-    const rows = fetchPaid(startOfLocalDay(`${key}-01`), startOfLocalDay(`${shiftMonth(key, 1)}-01`));
+  const monthSum = async (key) => {
+    const rows = await fetchPaid(startOfLocalDay(`${key}-01`), startOfLocalDay(`${shiftMonth(key, 1)}-01`));
     return rows.reduce((s, o) => s + o.total_cents, 0);
   };
-  const cur = monthSum(curKey);
-  const prev = monthSum(prevKey);
+  const cur = await monthSum(curKey);
+  const prev = await monthSum(prevKey);
 
   return {
     range: { from, to },
@@ -111,7 +111,7 @@ export function buildDashboard({ from, to }, fetchPaid, fetchItems) {
       deltaPct: prev > 0 ? ((cur - prev) / prev) * 100 : null,
     },
     monthly,
-    topProducts: fetchItems(fromIso, toIso).slice(0, 6),
+    topProducts: (await fetchItems(fromIso, toIso)).slice(0, 6),
     comparative,
   };
 }

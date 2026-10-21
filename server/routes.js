@@ -1,47 +1,24 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import express from "express";
-import { tx } from "./db.js";
-import {
-  COOKIE,
-  HttpError,
-  createLoginLimiter,
-  createSession,
-  destroySession,
-  destroyUserSessions,
-  hashPassword,
-  readCookie,
-  requireAuth,
-  requireOwner,
-  sessionCookie,
-  verifyPassword,
-} from "./auth.js";
+import { createAuth, HttpError } from "./auth.js";
 import { buildDashboard, parseRange } from "./dashboard.js";
-import { parseId, parseLogin, parseOrder, parseProduct, parseUser } from "./validate.js";
+import {
+  PENDING_MINUTES,
+  MAX_PENDING_PER_USER,
+  STAFF_ORDER_SQL,
+  cancelAny,
+  cancelPending,
+  customerOrders,
+  expireStale,
+  insertOrder,
+  reserveItems,
+  staffOrders,
+} from "./orders.js";
+import { applyPayment, handleWebhook } from "./payments.js";
+import { parseCheckout, parseId, parseOrder, parseProduct, parseProfile, parseUser, parseUuid } from "./validate.js";
+import { notifyOrderPaid } from "./whatsapp.js";
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const now = () => new Date().toISOString();
-
-const productOut = (r) => ({
-  id: r.id,
-  name: r.name,
-  description: r.description,
-  category: r.category,
-  priceCents: r.price_cents,
-  promoPriceCents: r.promo_price_cents,
-  featured: !!r.featured,
-  launch: !!r.launch,
-  active: !!r.active,
-  stock: r.stock,
-  variations: JSON.parse(r.variations),
-  colors: JSON.parse(r.colors),
-  photos: JSON.parse(r.photos),
-  createdAt: r.created_at,
-  updatedAt: r.updated_at,
-});
-
-const userOut = (r) => ({ id: r.id, name: r.name, email: r.email, role: r.role, active: !!r.active, createdAt: r.created_at });
+const iso = (d) => (d ? new Date(d).toISOString() : null);
 
 const IMAGE_TYPES = [
   { ext: "jpg", mime: "image/jpeg", test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
@@ -52,287 +29,424 @@ const IMAGE_TYPES = [
     test: (b) => b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP",
   },
 ];
+// A Vercel recusa corpo acima de 4,5 MB; ficamos abaixo disso.
+export const MAX_UPLOAD = "4mb";
 
-export function createApi(db, { uploadsDir, secureCookie = false, loginMax = 5 }) {
+const productOut = (r) => ({
+  id: r.id,
+  name: r.name,
+  description: r.description,
+  category: r.category,
+  priceCents: r.price_cents,
+  promoPriceCents: r.promo_price_cents,
+  featured: r.featured,
+  launch: r.launch,
+  active: r.active,
+  stock: r.stock,
+  variations: r.variations,
+  colors: r.colors,
+  photos: r.photos,
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
+});
+
+const profileOut = (p) => ({ id: p.id, email: p.email, name: p.name, phone: p.phone, address: p.address, role: p.role });
+const teamOut = (p) => ({ id: p.id, name: p.name, email: p.email, role: p.role, active: p.active, createdAt: iso(p.created_at) });
+
+export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20_000 }) {
   const router = express.Router();
-  const auth = requireAuth(db);
-  const limiter = createLoginLimiter({ max: loginMax });
+  const auth = createAuth({ db, provider });
+  const sweep = () => expireStale(db, { minMs: sweepMs });
 
-  /* ---------- autenticação ---------- */
-  router.post(
-    "/auth/login",
-    wrap(async (req, res) => {
-      const { email, password } = parseLogin(req.body);
-      const key = `${req.ip}|${email}`;
-      if (limiter.blocked(key)) throw new HttpError(429, "Muitas tentativas. Aguarde alguns minutos e tente de novo.");
-      const user = db.prepare("SELECT * FROM users WHERE email = ? AND active = 1").get(email);
-      const ok = await verifyPassword(password, user?.password_hash);
-      if (!user || !ok) {
-        limiter.fail(key);
-        throw new HttpError(401, "E-mail ou senha incorretos.");
-      }
-      limiter.clear(key);
-      const token = createSession(db, user.id);
-      res.setHeader("Set-Cookie", sessionCookie(token, secureCookie));
-      res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  const baseUrl = (req) => {
+    if (siteUrl) return siteUrl.replace(/\/+$/, "");
+    const proto = String(req.headers["x-forwarded-proto"] ?? req.protocol).split(",")[0];
+    const host = String(req.headers["x-forwarded-host"] ?? req.headers.host).split(",")[0];
+    return `${proto}://${host}`;
+  };
+
+  /* ---------- catálogo público (somente leitura) ---------- */
+  router.get(
+    "/catalog",
+    wrap(async (_req, res) => {
+      await sweep(); // devolve ao estoque o que passou do prazo sem pagamento
+      const { rows } = await db.query("select * from products where active = true order by id desc");
+      res.setHeader("Cache-Control", "no-cache");
+      res.json({
+        products: rows.map((r) => {
+          const promo = r.promo_price_cents !== null && r.promo_price_cents < r.price_cents;
+          return {
+            id: r.id,
+            name: r.name,
+            description: r.description,
+            category: r.category,
+            priceCents: promo ? r.promo_price_cents : r.price_cents,
+            compareAtCents: promo ? r.price_cents : null,
+            featured: r.featured,
+            launch: r.launch,
+            stock: r.stock,
+            variations: r.variations,
+            colors: r.colors,
+            images: r.photos,
+          };
+        }),
+      });
     }),
   );
 
-  router.post("/auth/logout", (req, res) => {
-    destroySession(db, readCookie(req, COOKIE));
-    res.setHeader("Set-Cookie", sessionCookie(null, secureCookie));
-    res.json({ ok: true });
-  });
+  /* ---------- aviso de pagamento (Mercado Pago chama aqui) ---------- */
+  router.post(
+    "/payments/webhook",
+    wrap(async (req, res) => {
+      if (!mp.enabled) return res.status(200).json({ ok: true, ignored: true });
+      res.json(await handleWebhook({ db, wa, mp, query: req.query, body: req.body, headers: req.headers }));
+    }),
+  );
 
-  router.get("/auth/me", auth, (req, res) => res.json({ user: req.user }));
+  /* ---------- conta do cliente (qualquer pessoa logada) ---------- */
+  router.get("/me", auth.user, (req, res) => res.json({ user: profileOut(req.user) }));
 
-  /* ---------- catálogo público (somente leitura) ---------- */
-  // Só produtos ativos e só campos próprios para a vitrine (nada interno).
-  router.get("/catalog", (_req, res) => {
-    const rows = db.prepare("SELECT * FROM products WHERE active = 1 ORDER BY id DESC").all();
-    res.setHeader("Cache-Control", "no-cache");
-    res.json({
-      products: rows.map((r) => {
-        const promo = r.promo_price_cents !== null && r.promo_price_cents < r.price_cents;
-        return {
-          id: r.id,
-          name: r.name,
-          description: r.description,
-          category: r.category,
-          priceCents: promo ? r.promo_price_cents : r.price_cents,
-          compareAtCents: promo ? r.price_cents : null,
-          featured: !!r.featured,
-          launch: !!r.launch,
-          stock: r.stock,
-          variations: JSON.parse(r.variations),
-          colors: JSON.parse(r.colors),
-          images: JSON.parse(r.photos),
-        };
-      }),
-    });
-  });
+  router.put(
+    "/me",
+    auth.user,
+    wrap(async (req, res) => {
+      const p = parseProfile(req.body);
+      const cur = req.user;
+      const { rows } = await db.query(
+        "update profiles set name = $2, phone = $3, address = $4 where id = $1 returning id, email, name, phone, address, role",
+        [cur.id, p.name ?? cur.name, p.phone ?? cur.phone, p.address === undefined ? (cur.address ? JSON.stringify(cur.address) : null) : p.address ? JSON.stringify(p.address) : null],
+      );
+      res.json({ user: profileOut(rows[0]) });
+    }),
+  );
 
-  /* Tudo abaixo exige login */
-  router.use(auth);
+  router.get(
+    "/my/orders",
+    auth.user,
+    wrap(async (req, res) => {
+      await sweep();
+      const { rows } = await db.query("select * from orders where customer_id = $1 and source = 'site' order by id desc limit 50", [req.user.id]);
+      res.json({ orders: await customerOrders(db, rows) });
+    }),
+  );
+
+  const myOrder = async (req) => {
+    const id = parseId(req.params.id);
+    const { rows } = await db.query("select * from orders where id = $1 and customer_id = $2", [id, req.user.id]);
+    if (!rows[0]) throw new HttpError(404, "Pedido não encontrado.");
+    return rows[0];
+  };
+
+  router.get(
+    "/my/orders/:id",
+    auth.user,
+    wrap(async (req, res) => {
+      await sweep();
+      res.json({ order: (await customerOrders(db, [await myOrder(req)]))[0] });
+    }),
+  );
+
+  // Ao voltar do Mercado Pago, confere o pagamento na hora (não depende só do aviso automático).
+  router.post(
+    "/my/orders/:id/sync",
+    auth.user,
+    wrap(async (req, res) => {
+      let o = await myOrder(req);
+      if (o.status === "pending" && mp.enabled) {
+        const payment = await mp.findApprovedPayment(o.id).catch(() => null);
+        if (payment) await applyPayment({ db, wa, payment });
+        o = await myOrder(req);
+      }
+      res.json({ order: (await customerOrders(db, [o]))[0] });
+    }),
+  );
+
+  router.post(
+    "/my/orders/:id/cancel",
+    auth.user,
+    wrap(async (req, res) => {
+      const o = await myOrder(req);
+      if (o.status !== "pending") throw new HttpError(409, "Só é possível cancelar pedidos aguardando pagamento.");
+      await db.tx((t) => cancelPending(t, o.id, { ownerId: req.user.id }));
+      res.json({ order: (await customerOrders(db, [await myOrder(req)]))[0] });
+    }),
+  );
+
+  /* ---------- finalizar compra: cria o pedido, reserva o estoque e gera o pagamento ---------- */
+  router.post(
+    "/checkout",
+    auth.user,
+    wrap(async (req, res) => {
+      if (!mp.enabled) throw new HttpError(503, "O pagamento online ainda não está disponível. Fale com a loja pelo WhatsApp.");
+      const input = parseCheckout(req.body);
+      await expireStale(db, { force: true });
+
+      const pending = (await db.query("select count(*)::int as n from orders where customer_id = $1 and status = 'pending'", [req.user.id])).rows[0].n;
+      if (pending >= MAX_PENDING_PER_USER) throw new HttpError(429, "Você já tem pedidos aguardando pagamento. Pague ou cancele um deles.");
+
+      const expiresAt = new Date(Date.now() + PENDING_MINUTES * 60_000);
+      const { order, lines } = await db.tx(async (t) => {
+        const lines = await reserveItems(t, input.items);
+        const order = await insertOrder(
+          t,
+          {
+            source: "site",
+            customerId: req.user.id,
+            customerName: input.name,
+            customerEmail: req.user.email,
+            customerPhone: input.phone,
+            shipping: input.shipping,
+            status: "pending",
+            expiresAt,
+          },
+          lines,
+        );
+        // Guarda nome, telefone e endereço como padrão para a próxima compra.
+        await t.query("update profiles set name = $2, phone = $3, address = $4 where id = $1", [req.user.id, input.name, input.phone, JSON.stringify(input.shipping)]);
+        return { order, lines };
+      });
+
+      let pref;
+      try {
+        pref = await mp.createPreference({
+          order,
+          items: lines,
+          payer: { name: input.name, email: req.user.email },
+          siteUrl: baseUrl(req),
+          expiresAt,
+        });
+        if (!pref?.url) throw new Error("sem link de pagamento");
+      } catch (e) {
+        console.error("Mercado Pago:", e?.message ?? e);
+        await db.tx((t) => cancelPending(t, order.id)); // devolve o estoque
+        throw new HttpError(502, "Não foi possível iniciar o pagamento agora. Tente de novo em instantes.");
+      }
+      await db.query("update orders set payment_provider = 'mercadopago', payment_url = $2 where id = $1", [order.id, pref.url]);
+      res.status(201).json({ orderId: order.id, checkoutUrl: pref.url });
+    }),
+  );
+
+  /* ================= Tudo abaixo é só para colaboradores ================= */
 
   /* ---------- produtos / estoque ---------- */
-  router.get("/products", (_req, res) => {
-    const rows = db.prepare("SELECT * FROM products ORDER BY name COLLATE NOCASE").all();
-    res.json({ products: rows.map(productOut) });
-  });
+  router.get(
+    "/products",
+    auth.staff,
+    wrap(async (_req, res) => {
+      const { rows } = await db.query("select * from products order by lower(name)");
+      res.json({ products: rows.map(productOut) });
+    }),
+  );
 
-  router.post("/products", (req, res) => {
-    const p = parseProduct(req.body);
-    const t = now();
-    const r = db
-      .prepare(
-        `INSERT INTO products (name, description, category, price_cents, promo_price_cents, featured, launch, active, stock, variations, colors, photos, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      )
-      .run(p.name, p.description, p.category, p.priceCents, p.promoPriceCents, +p.featured, +p.launch, +p.active, p.stock, JSON.stringify(p.variations), JSON.stringify(p.colors), JSON.stringify(p.photos), t, t);
-    const row = db.prepare("SELECT * FROM products WHERE id = ?").get(r.lastInsertRowid);
-    res.status(201).json({ product: productOut(row) });
-  });
+  const productParams = (p) => [p.name, p.description, p.category, p.priceCents, p.promoPriceCents, p.featured, p.launch, p.active, p.stock, JSON.stringify(p.variations), JSON.stringify(p.colors), JSON.stringify(p.photos)];
 
-  router.put("/products/:id", (req, res) => {
-    const id = parseId(req.params.id);
-    const p = parseProduct(req.body);
-    const old = db.prepare("SELECT photos FROM products WHERE id = ?").get(id);
-    if (!old) throw new HttpError(404, "Produto não encontrado.");
-    db.prepare(
-      `UPDATE products SET name=?, description=?, category=?, price_cents=?, promo_price_cents=?, featured=?, launch=?, active=?, stock=?, variations=?, colors=?, photos=?, updated_at=? WHERE id=?`,
-    ).run(p.name, p.description, p.category, p.priceCents, p.promoPriceCents, +p.featured, +p.launch, +p.active, p.stock, JSON.stringify(p.variations), JSON.stringify(p.colors), JSON.stringify(p.photos), now(), id);
-    removeOrphanPhotos(JSON.parse(old.photos).filter((f) => !p.photos.includes(f)));
-    res.json({ product: productOut(db.prepare("SELECT * FROM products WHERE id = ?").get(id)) });
-  });
+  router.post(
+    "/products",
+    auth.staff,
+    wrap(async (req, res) => {
+      const p = parseProduct(req.body, { ownsPhoto: storage.owns });
+      const { rows } = await db.query(
+        `insert into products (name, description, category, price_cents, promo_price_cents, featured, launch, active, stock, variations, colors, photos)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+        productParams(p),
+      );
+      res.status(201).json({ product: productOut(rows[0]) });
+    }),
+  );
 
-  router.delete("/products/:id", (req, res) => {
-    const id = parseId(req.params.id);
-    const old = db.prepare("SELECT photos FROM products WHERE id = ?").get(id);
-    if (!old) throw new HttpError(404, "Produto não encontrado.");
-    db.prepare("DELETE FROM products WHERE id = ?").run(id); // itens de pedidos antigos mantêm o nome
-    removeOrphanPhotos(JSON.parse(old.photos));
-    res.json({ ok: true });
-  });
+  router.put(
+    "/products/:id",
+    auth.staff,
+    wrap(async (req, res) => {
+      const id = parseId(req.params.id);
+      const p = parseProduct(req.body, { ownsPhoto: storage.owns });
+      const old = (await db.query("select photos from products where id = $1", [id])).rows[0];
+      if (!old) throw new HttpError(404, "Produto não encontrado.");
+      const { rows } = await db.query(
+        `update products set name=$1, description=$2, category=$3, price_cents=$4, promo_price_cents=$5, featured=$6, launch=$7, active=$8, stock=$9,
+           variations=$10, colors=$11, photos=$12, updated_at=now() where id=$13 returning *`,
+        [...productParams(p), id],
+      );
+      await removeOrphanPhotos(old.photos.filter((f) => !p.photos.includes(f)));
+      res.json({ product: productOut(rows[0]) });
+    }),
+  );
 
-  function removeOrphanPhotos(urls) {
+  router.delete(
+    "/products/:id",
+    auth.staff,
+    wrap(async (req, res) => {
+      const id = parseId(req.params.id);
+      const old = (await db.query("select photos from products where id = $1", [id])).rows[0];
+      if (!old) throw new HttpError(404, "Produto não encontrado.");
+      await db.query("delete from products where id = $1", [id]); // itens de pedidos antigos mantêm o nome
+      await removeOrphanPhotos(old.photos);
+      res.json({ ok: true });
+    }),
+  );
+
+  async function removeOrphanPhotos(urls) {
+    const gone = [];
     for (const url of urls) {
-      const used = db.prepare("SELECT 1 FROM products WHERE photos LIKE ? LIMIT 1").get(`%${url}%`);
-      if (!used) fs.rm(path.join(uploadsDir, path.basename(url)), { force: true }, () => {});
+      const used = (await db.query("select 1 from products where photos @> $1::jsonb limit 1", [JSON.stringify([url])])).rows[0];
+      if (!used) gone.push(url);
     }
+    if (gone.length) await storage.remove(gone).catch(() => {});
   }
 
   /* ---------- upload de fotos ---------- */
   router.post(
     "/uploads",
-    express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "6mb" }),
-    (req, res) => {
+    auth.staff,
+    express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: MAX_UPLOAD }),
+    wrap(async (req, res) => {
       const buf = req.body;
-      if (!Buffer.isBuffer(buf) || buf.length === 0) throw new HttpError(415, "Envie uma imagem JPG, PNG ou WebP (até 6 MB).");
+      if (!Buffer.isBuffer(buf) || buf.length === 0) throw new HttpError(415, "Envie uma imagem JPG, PNG ou WebP (até 4 MB).");
       const type = IMAGE_TYPES.find((t) => t.mime === req.headers["content-type"]?.split(";")[0] && t.test(buf));
       if (!type) throw new HttpError(415, "Arquivo de imagem inválido.");
-      fs.mkdirSync(uploadsDir, { recursive: true });
-      const name = `${crypto.randomBytes(16).toString("hex")}.${type.ext}`;
-      fs.writeFileSync(path.join(uploadsDir, name), buf);
-      res.status(201).json({ url: `/uploads/${name}` });
-    },
+      res.status(201).json({ url: await storage.put(buf, type.ext, type.mime) });
+    }),
   );
 
   /* ---------- pedidos ---------- */
-  const ordersWithItems = (rows) => {
-    const getItems = db.prepare("SELECT product_id, name, variation, qty, unit_price_cents FROM order_items WHERE order_id = ? ORDER BY id");
-    return rows.map((o) => ({
-      id: o.id,
-      customerName: o.customer_name,
-      note: o.note,
-      status: o.status,
-      totalCents: o.total_cents,
-      createdAt: o.created_at,
-      paidAt: o.paid_at,
-      createdByName: o.created_by_name ?? null,
-      items: getItems.all(o.id).map((i) => ({
-        productId: i.product_id,
-        name: i.name,
-        variation: i.variation,
-        qty: i.qty,
-        unitPriceCents: i.unit_price_cents,
-      })),
-    }));
+  const orderById = async (id) => {
+    const { rows } = await db.query(`${STAFF_ORDER_SQL} where o.id = $1`, [id]);
+    return (await staffOrders(db, rows))[0];
   };
 
-  router.get("/orders", (_req, res) => {
-    const rows = db
-      .prepare(
-        `SELECT o.*, u.name AS created_by_name FROM orders o LEFT JOIN users u ON u.id = o.created_by
-         ORDER BY o.id DESC LIMIT 200`,
-      )
-      .all();
-    res.json({ orders: ordersWithItems(rows) });
-  });
+  router.get(
+    "/orders",
+    auth.staff,
+    wrap(async (_req, res) => {
+      await sweep();
+      const { rows } = await db.query(`${STAFF_ORDER_SQL} order by o.id desc limit 200`);
+      res.json({ orders: await staffOrders(db, rows) });
+    }),
+  );
 
-  router.post("/orders", (req, res) => {
-    const input = parseOrder(req.body);
-    const id = tx(db, () => {
-      let total = 0;
-      const lines = [];
-      for (const it of input.items) {
-        const p = db.prepare("SELECT * FROM products WHERE id = ?").get(it.productId);
-        if (!p || !p.active) throw new HttpError(400, "Produto indisponível.");
-        const variations = JSON.parse(p.variations);
-        if (variations.length) {
-          const v = variations.find((x) => x.label === it.variation);
-          if (!v) throw new HttpError(400, `Escolha a variação de ${p.name}.`);
-          if (v.stock < it.qty) throw new HttpError(400, `Estoque insuficiente: ${p.name} (${v.label}) tem ${v.stock}.`);
-          v.stock -= it.qty;
-        } else if (p.stock < it.qty) {
-          throw new HttpError(400, `Estoque insuficiente: ${p.name} tem ${p.stock}.`);
-        }
-        const stock = variations.length ? variations.reduce((s, x) => s + x.stock, 0) : p.stock - it.qty;
-        db.prepare("UPDATE products SET stock = ?, variations = ?, updated_at = ? WHERE id = ?").run(stock, JSON.stringify(variations), now(), p.id);
-        const unit = p.promo_price_cents ?? p.price_cents;
-        total += unit * it.qty;
-        lines.push({ id: p.id, name: p.name, variation: it.variation, qty: it.qty, unit });
-      }
-      const t = now();
-      const status = input.paid ? "paid" : "pending";
-      const r = db
-        .prepare("INSERT INTO orders (customer_name, note, status, total_cents, created_by, created_at, paid_at) VALUES (?,?,?,?,?,?,?)")
-        .run(input.customerName, input.note, status, total, req.user.id, t, input.paid ? t : null);
-      for (const l of lines)
-        db.prepare("INSERT INTO order_items (order_id, product_id, name, variation, qty, unit_price_cents) VALUES (?,?,?,?,?,?)").run(r.lastInsertRowid, l.id, l.name, l.variation, l.qty, l.unit);
-      return r.lastInsertRowid;
-    });
-    const row = db.prepare("SELECT o.*, u.name AS created_by_name FROM orders o LEFT JOIN users u ON u.id = o.created_by WHERE o.id = ?").get(id);
-    res.status(201).json({ order: ordersWithItems([row])[0] });
-  });
+  // Pedido digitado à mão (venda presencial / WhatsApp).
+  router.post(
+    "/orders",
+    auth.staff,
+    wrap(async (req, res) => {
+      const input = parseOrder(req.body);
+      const id = await db.tx(async (t) => {
+        const lines = await reserveItems(t, input.items);
+        const o = await insertOrder(
+          t,
+          { source: "panel", customerName: input.customerName, note: input.note, status: input.paid ? "paid" : "pending", createdBy: req.user.id },
+          lines,
+        );
+        return o.id;
+      });
+      res.status(201).json({ order: await orderById(id) });
+    }),
+  );
 
-  router.patch("/orders/:id", (req, res) => {
-    const id = parseId(req.params.id);
-    const action = req.body?.action;
-    if (!["pay", "cancel"].includes(action)) throw new HttpError(400, "Ação inválida.");
-    tx(db, () => {
-      const o = db.prepare("SELECT * FROM orders WHERE id = ?").get(id);
+  router.patch(
+    "/orders/:id",
+    auth.staff,
+    wrap(async (req, res) => {
+      const id = parseId(req.params.id);
+      const action = req.body?.action;
+      if (!["pay", "cancel", "resend-whatsapp", "resolve"].includes(action)) throw new HttpError(400, "Ação inválida.");
+      const o = (await db.query("select * from orders where id = $1", [id])).rows[0];
       if (!o) throw new HttpError(404, "Pedido não encontrado.");
-      if (o.status === "canceled") throw new HttpError(409, "Pedido já cancelado.");
-      if (action === "pay") {
+
+      if (action === "resend-whatsapp") {
+        if (o.source !== "site" || o.status !== "paid") throw new HttpError(409, "Só pedidos do site já pagos têm aviso de WhatsApp.");
+        await notifyOrderPaid(db, wa, id);
+      } else if (action === "resolve") {
+        await db.query("update orders set needs_review = false where id = $1", [id]);
+      } else if (action === "pay") {
+        if (o.status === "canceled") throw new HttpError(409, "Pedido já cancelado.");
         if (o.status !== "pending") throw new HttpError(409, "Pedido já está pago.");
-        db.prepare("UPDATE orders SET status='paid', paid_at=? WHERE id=?").run(now(), id);
-        return;
+        if (o.source === "site") throw new HttpError(409, "Pedidos do site são marcados como pagos automaticamente pelo Mercado Pago.");
+        await db.query("update orders set status = 'paid', paid_at = now() where id = $1", [id]);
+      } else {
+        await db.tx((t) => cancelAny(t, id));
       }
-      // cancelar: devolve ao estoque
-      for (const it of db.prepare("SELECT * FROM order_items WHERE order_id = ?").all(id)) {
-        if (!it.product_id) continue;
-        const p = db.prepare("SELECT * FROM products WHERE id = ?").get(it.product_id);
-        if (!p) continue;
-        const variations = JSON.parse(p.variations);
-        const v = variations.find((x) => x.label === it.variation);
-        if (v) v.stock += it.qty;
-        const stock = variations.length ? variations.reduce((s, x) => s + x.stock, 0) : p.stock + it.qty;
-        db.prepare("UPDATE products SET stock=?, variations=?, updated_at=? WHERE id=?").run(stock, JSON.stringify(variations), now(), p.id);
-      }
-      db.prepare("UPDATE orders SET status='canceled' WHERE id=?").run(id);
-    });
-    const row = db.prepare("SELECT o.*, u.name AS created_by_name FROM orders o LEFT JOIN users u ON u.id = o.created_by WHERE o.id = ?").get(id);
-    res.json({ order: ordersWithItems([row])[0] });
-  });
+      res.json({ order: await orderById(id) });
+    }),
+  );
 
   /* ---------- dashboard ---------- */
-  router.get("/dashboard", (req, res) => {
-    const range = parseRange(req.query.from, req.query.to);
-    const paid = db.prepare("SELECT paid_at, total_cents FROM orders WHERE status='paid' AND paid_at >= ? AND paid_at < ?");
-    const top = db.prepare(
-      `SELECT i.name AS name, SUM(i.qty) AS qty, SUM(i.qty * i.unit_price_cents) AS revenue_cents
-       FROM order_items i JOIN orders o ON o.id = i.order_id
-       WHERE o.status='paid' AND o.paid_at >= ? AND o.paid_at < ?
-       GROUP BY i.name ORDER BY qty DESC, revenue_cents DESC LIMIT 6`,
-    );
-    res.json(
-      buildDashboard(
-        range,
-        (a, b) => paid.all(a, b),
-        (a, b) => top.all(a, b).map((r) => ({ name: r.name, qty: r.qty, revenueCents: r.revenue_cents })),
-      ),
-    );
-  });
+  router.get(
+    "/dashboard",
+    auth.staff,
+    wrap(async (req, res) => {
+      const range = parseRange(req.query.from, req.query.to);
+      res.json(
+        await buildDashboard(
+          range,
+          async (a, b) =>
+            (await db.query("select paid_at, total_cents from orders where status = 'paid' and paid_at >= $1 and paid_at < $2", [a, b])).rows.map((r) => ({
+              paid_at: iso(r.paid_at),
+              total_cents: r.total_cents,
+            })),
+          async (a, b) =>
+            (
+              await db.query(
+                `select i.name as name, sum(i.qty)::int as qty, sum(i.qty * i.unit_price_cents)::int as revenue_cents
+                 from order_items i join orders o on o.id = i.order_id
+                 where o.status = 'paid' and o.paid_at >= $1 and o.paid_at < $2
+                 group by i.name order by qty desc, revenue_cents desc limit 6`,
+                [a, b],
+              )
+            ).rows.map((r) => ({ name: r.name, qty: r.qty, revenueCents: r.revenue_cents })),
+        ),
+      );
+    }),
+  );
 
   /* ---------- equipe (somente proprietário) ---------- */
-  router.get("/users", requireOwner, (_req, res) => {
-    res.json({ users: db.prepare("SELECT * FROM users ORDER BY name COLLATE NOCASE").all().map(userOut) });
-  });
+  router.get(
+    "/users",
+    auth.owner,
+    wrap(async (_req, res) => {
+      const { rows } = await db.query("select * from profiles where role in ('staff','owner') order by lower(name)");
+      res.json({ users: rows.map(teamOut) });
+    }),
+  );
 
   router.post(
     "/users",
-    requireOwner,
+    auth.owner,
     wrap(async (req, res) => {
       const u = parseUser(req.body);
-      if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(u.email)) throw new HttpError(409, "Já existe um usuário com este e-mail.");
-      const r = db
-        .prepare("INSERT INTO users (email, name, role, password_hash, active, created_at) VALUES (?,?,?,?,1,?)")
-        .run(u.email, u.name, u.role, await hashPassword(u.password), now());
-      res.status(201).json({ user: userOut(db.prepare("SELECT * FROM users WHERE id = ?").get(r.lastInsertRowid)) });
+      const existing = (await db.query("select * from profiles where lower(email) = $1", [u.email])).rows[0];
+      if (existing) {
+        // Cliente que já tem conta: só promove (não cria outra).
+        if (existing.role !== "customer") throw new HttpError(409, "Este e-mail já é de um colaborador.");
+        const { rows } = await db.query("update profiles set role = $2, name = case when name = '' then $3 else name end, active = true where id = $1 returning *", [existing.id, u.role, u.name]);
+        return res.status(200).json({ user: teamOut(rows[0]) });
+      }
+      if (!u.password) throw new HttpError(400, "Informe uma senha de pelo menos 8 caracteres.");
+      const { id } = await provider.createUser({ email: u.email, password: u.password, name: u.name });
+      const { rows } = await db.query(
+        `insert into profiles (id, email, name, role) values ($1,$2,$3,$4)
+         on conflict (id) do update set role = excluded.role, name = excluded.name, active = true returning *`,
+        [id, u.email, u.name, u.role],
+      );
+      res.status(201).json({ user: teamOut(rows[0]) });
     }),
   );
 
   router.patch(
     "/users/:id",
-    requireOwner,
+    auth.owner,
     wrap(async (req, res) => {
-      const id = parseId(req.params.id);
-      const cur = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
+      const id = parseUuid(req.params.id);
+      const cur = (await db.query("select * from profiles where id = $1 and role in ('staff','owner')", [id])).rows[0];
       if (!cur) throw new HttpError(404, "Usuário não encontrado.");
       const u = parseUser(req.body, { partial: true });
-
       const nextRole = u.role ?? cur.role;
-      const nextActive = u.active ?? !!cur.active;
-      if (id === req.user.id && (!nextActive || nextRole !== "owner"))
-        throw new HttpError(400, "Você não pode desativar nem rebaixar a si mesmo.");
-      if (u.email && u.email !== cur.email && db.prepare("SELECT 1 FROM users WHERE email = ?").get(u.email))
-        throw new HttpError(409, "Já existe um usuário com este e-mail.");
-
-      db.prepare("UPDATE users SET name=?, email=?, role=?, active=? WHERE id=?").run(u.name ?? cur.name, u.email ?? cur.email, nextRole, +nextActive, id);
-      if (u.password) db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(await hashPassword(u.password), id);
-      if (u.password || !nextActive || nextRole !== cur.role) destroyUserSessions(db, id);
-      res.json({ user: userOut(db.prepare("SELECT * FROM users WHERE id = ?").get(id)) });
+      const nextActive = u.active ?? cur.active;
+      if (id === req.user.id && (!nextActive || nextRole !== "owner")) throw new HttpError(400, "Você não pode desativar nem rebaixar a si mesmo.");
+      const { rows } = await db.query("update profiles set name = $2, role = $3, active = $4 where id = $1 returning *", [id, u.name ?? cur.name, nextRole, nextActive]);
+      if (u.password) await provider.updateUser(id, { password: u.password });
+      if (u.active !== undefined) await provider.updateUser(id, { banned: !u.active }).catch(() => {});
+      res.json({ user: teamOut(rows[0]) });
     }),
   );
 

@@ -3,12 +3,14 @@ import { CATEGORY_SLUGS } from "../data/products";
 import { STORE } from "../config/store";
 import { Link, usePathname } from "../lib/router";
 import { useCart } from "../state/CartContext";
+import { useAuth } from "../state/AuthContext";
 import { useCatalog } from "../state/CatalogContext";
 import { Logo } from "./Logo";
 
 export function Header() {
   const { count, setOpen } = useCart();
   const { categories } = useCatalog();
+  const { user, configured } = useAuth();
   const path = usePathname();
   const [menu, setMenu] = useState(false);
 
@@ -46,6 +48,11 @@ export function Header() {
         <a className="header__ig" href={STORE.instagramUrl} target="_blank" rel="noopener noreferrer">
           {STORE.instagramHandle}
         </a>
+        {configured && (
+          <Link className="header__ig" to={user ? "/conta" : "/entrar"}>
+            {user ? "Minha conta" : "Entrar"}
+          </Link>
+        )}
         <button className="btn btn--ghost" onClick={() => setOpen(true)} aria-label={`Abrir carrinho, ${count} ${count === 1 ? "item" : "itens"}`}>
           Carrinho <span className="badge" aria-hidden="true">{count}</span>
         </button>

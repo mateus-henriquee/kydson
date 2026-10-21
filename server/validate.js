@@ -1,7 +1,6 @@
 import { HttpError } from "./auth.js";
 
 export const CATEGORIES = ["relogio", "perfume", "acessorio", "outros"];
-const PHOTO_RE = /^\/uploads\/[a-f0-9]{32}\.(jpg|png|webp)$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const bad = (msg) => new HttpError(400, msg);
@@ -19,13 +18,19 @@ function int(v, label, { min = 0, max = 1_000_000_000 } = {}) {
   return v;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function parseUuid(v) {
+  if (typeof v !== "string" || !UUID_RE.test(v)) throw new HttpError(404, "Não encontrado.");
+  return v.toLowerCase();
+}
+
 export function parseId(v) {
   const n = Number(v);
   if (!Number.isInteger(n) || n < 1) throw new HttpError(404, "Não encontrado.");
   return n;
 }
 
-export function parseProduct(body) {
+export function parseProduct(body, { ownsPhoto }) {
   if (!body || typeof body !== "object") throw bad("Dados inválidos.");
   const name = str(body.name, "Nome", { min: 1, max: 120 });
   const description = str(body.description ?? "", "Descrição", { max: 2000 });
@@ -65,7 +70,7 @@ export function parseProduct(body) {
     : int(body.stock ?? 0, "Estoque", { max: 1_000_000 });
 
   const photos = body.photos ?? [];
-  if (!Array.isArray(photos) || photos.length > 8 || photos.some((p) => typeof p !== "string" || !PHOTO_RE.test(p)))
+  if (!Array.isArray(photos) || photos.length > 8 || photos.some((p) => !ownsPhoto(p)))
     throw bad("Fotos inválidas.");
 
   return {
@@ -96,7 +101,9 @@ export function parseUser(body, { partial = false } = {}) {
     if (!["owner", "staff"].includes(body.role)) throw bad("Função inválida.");
     out.role = body.role;
   }
-  if (!partial || body.password !== undefined) {
+  if (!partial && body.password === undefined) {
+    // senha é opcional na criação: só é exigida quando o e-mail ainda não tem conta (a rota decide)
+  } else if (body.password !== undefined) {
     if (typeof body.password !== "string" || body.password.length < 8 || body.password.length > 200)
       throw bad("A senha deve ter pelo menos 8 caracteres.");
     out.password = body.password;
@@ -116,6 +123,7 @@ export function parseOrder(body) {
   const items = body.items.map((it) => ({
     productId: parseIdBad(it?.productId),
     variation: typeof it?.variation === "string" ? it.variation.trim() : "",
+    color: typeof it?.color === "string" ? it.color.trim() : "",
     qty: int(it?.qty, "Quantidade", { min: 1, max: 1000 }),
   }));
   return { customerName, note, items, paid: body.paid === true };
@@ -126,7 +134,55 @@ function parseIdBad(v) {
   return v;
 }
 
-export function parseLogin(body) {
-  if (!body || typeof body.email !== "string" || typeof body.password !== "string") throw bad("Informe e-mail e senha.");
-  return { email: body.email.trim().toLowerCase().slice(0, 120), password: body.password.slice(0, 200) };
+const UFS = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
+
+export function parsePhone(v, label = "Telefone") {
+  const digits = String(v ?? "").replace(/\D/g, "").replace(/^55(?=\d{10,11}$)/, "");
+  if (digits.length < 10 || digits.length > 11) throw bad(`${label} inválido. Informe DDD e número.`);
+  return digits;
+}
+
+export function parseAddress(a) {
+  if (!a || typeof a !== "object") throw bad("Informe o endereço de entrega.");
+  const cep = String(a.cep ?? "").replace(/\D/g, "");
+  if (cep.length !== 8) throw bad("CEP inválido.");
+  const state = String(a.state ?? "").toUpperCase();
+  if (!UFS.includes(state)) throw bad("Estado (UF) inválido.");
+  return {
+    cep,
+    street: str(a.street ?? "", "Rua", { min: 2, max: 120 }),
+    number: str(a.number ?? "", "Número", { min: 1, max: 20 }),
+    complement: str(a.complement ?? "", "Complemento", { max: 60 }),
+    neighborhood: str(a.neighborhood ?? "", "Bairro", { min: 2, max: 80 }),
+    city: str(a.city ?? "", "Cidade", { min: 2, max: 80 }),
+    state,
+  };
+}
+
+export function parseProfile(body) {
+  if (!body || typeof body !== "object") throw bad("Dados inválidos.");
+  const out = {};
+  if (body.name !== undefined) out.name = str(body.name, "Nome", { min: 2, max: 80 });
+  if (body.phone !== undefined) out.phone = body.phone === "" ? "" : parsePhone(body.phone);
+  if (body.address !== undefined) out.address = body.address === null ? null : parseAddress(body.address);
+  return out;
+}
+
+export const MAX_QTY_PER_ITEM = 10;
+
+export function parseCheckout(body) {
+  if (!body || typeof body !== "object") throw bad("Dados inválidos.");
+  if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 30) throw bad("O carrinho está vazio.");
+  const items = body.items.map((it) => ({
+    productId: parseIdBad(it?.productId),
+    variation: typeof it?.variation === "string" ? it.variation.trim() : "",
+    color: typeof it?.color === "string" ? it.color.trim() : "",
+    qty: int(it?.qty, "Quantidade", { min: 1, max: MAX_QTY_PER_ITEM }),
+  }));
+  return {
+    items,
+    name: str(body.name ?? "", "Nome", { min: 2, max: 80 }),
+    phone: parsePhone(body.phone),
+    shipping: parseAddress(body.shipping),
+  };
 }

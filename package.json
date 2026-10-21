@@ -4,19 +4,23 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node server/index.js",
+    "dev": "node --env-file-if-exists=.env server/index.js",
     "build": "tsc --noEmit && vite build",
-    "start": "node server/index.js --prod",
-    "user:add": "node server/create-user.js",
+    "start": "node --env-file-if-exists=.env server/index.js --prod",
+    "user:add": "node --env-file-if-exists=.env server/create-user.js",
     "test": "vitest run && node --no-warnings --test server/api.test.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "node --env-file-if-exists=.env server/migrate.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "express": "^4.22.3",
+    "pg": "^8.23.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.10",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
@@ -25,6 +29,6 @@
     "vitest": "^2.1.8"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=20.6"
   }
 }

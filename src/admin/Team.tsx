@@ -8,7 +8,7 @@ export function Team({ me }: { me: SessionUser }) {
   const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "staff" as Role });
   const [busy, setBusy] = useState(false);
-  const [resetFor, setResetFor] = useState<number | null>(null);
+  const [resetFor, setResetFor] = useState<string | null>(null);
   const [newPass, setNewPass] = useState("");
 
   const load = useCallback(async () => {
@@ -41,7 +41,7 @@ export function Team({ me }: { me: SessionUser }) {
 
   const add = async (e: FormEvent) => {
     e.preventDefault();
-    if (await run(() => api.createUser(form), `${form.name} foi adicionado(a).`)) setForm({ name: "", email: "", password: "", role: "staff" });
+    if (await run(() => api.createUser({ ...form, password: form.password || undefined }), `${form.name} foi adicionado(a).`)) setForm({ name: "", email: "", password: "", role: "staff" });
   };
 
   return (
@@ -74,7 +74,7 @@ export function Team({ me }: { me: SessionUser }) {
         </label>
         <label>
           Senha inicial (mín. 8 caracteres)
-          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" required />
+          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" placeholder="Vazio se já tem conta no site" />
         </label>
         <label>
           Função

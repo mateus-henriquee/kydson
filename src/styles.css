@@ -1476,3 +1476,157 @@ html {
   background: #cfa86b;
   background-clip: padding-box;
 }
+
+/* ===== Conta, checkout, pedido ===== */
+.page--narrow {
+  max-width: 560px;
+  margin-inline: auto;
+}
+.form {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.form__h {
+  font-size: 18px;
+  margin: 8px 0 0;
+}
+.form__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--mute);
+}
+.field {
+  min-width: 0;
+}
+.field--wide {
+  grid-column: 1 / -1;
+}
+.field input,
+.field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  background: var(--ink-2);
+  color: var(--bone);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 16px;
+}
+.field input:focus-visible,
+.field select:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+.field small {
+  color: var(--mute);
+}
+.form__error {
+  margin: 0;
+  color: #ff9d8a;
+  font-size: 14px;
+}
+.form__hint {
+  margin: 0;
+  color: var(--mute);
+  font-size: 13px;
+}
+.checkout {
+  display: grid;
+  gap: 40px;
+  margin-top: 24px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+}
+@media (max-width: 860px) {
+  .checkout {
+    grid-template-columns: 1fr;
+  }
+}
+.summary ul,
+.order__items {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.summary li,
+.order__items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+.summary small,
+.order__items small {
+  color: var(--mute);
+}
+.order {
+  display: grid;
+  gap: 16px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+.status {
+  display: inline-block;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 13px;
+}
+.status--paid {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.status--canceled {
+  color: var(--mute);
+}
+
+/* ===== Ícone fixo do WhatsApp: dourado, sem fundo ===== */
+.wa-fab {
+  position: fixed;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 40;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: var(--gold);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  opacity: 0.85;
+  transition: opacity 0.2s, transform 0.2s var(--ease);
+}
+.wa-fab:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+.wa-fab:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wa-fab {
+    transition: none;
+  }
+  .wa-fab:hover {
+    transform: none;
+  }
+}

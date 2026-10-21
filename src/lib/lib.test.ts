@@ -5,6 +5,7 @@ import { buildOrderMessage, buildWhatsAppUrl, normalizePhone } from "./whatsapp"
 import { discountPct, type Product } from "../data/products";
 import { applyFilters, collectColors, collectSizes, EMPTY_FILTERS, hasActiveFilters, priceBounds, recommend } from "./catalogFilter";
 import { parseRoute } from "./router";
+import { maskCep, maskPhone, validateDelivery } from "./address";
 
 const prod = (over: Partial<Product>): Product => ({
   id: 1,
@@ -194,6 +195,31 @@ describe("rotas", () => {
     expect(parseRoute("/produto/12")).toEqual({ name: "product", id: 12 });
     expect(parseRoute("/produto/abc")).toEqual({ name: "notfound" });
     expect(parseRoute("/qualquer")).toEqual({ name: "notfound" });
+    expect(parseRoute("/entrar")).toEqual({ name: "login" });
+    expect(parseRoute("/conta/")).toEqual({ name: "account" });
+    expect(parseRoute("/finalizar")).toEqual({ name: "checkout" });
+    expect(parseRoute("/pedido/15")).toEqual({ name: "order", id: 15 });
+    expect(parseRoute("/pedido/x")).toEqual({ name: "notfound" });
+  });
+});
+
+describe("endereço e telefone", () => {
+  it("aplica máscaras", () => {
+    expect(maskCep("01310100")).toBe("01310-100");
+    expect(maskCep("0131")).toBe("0131");
+    expect(maskPhone("11999998888")).toBe("(11) 99999-8888");
+    expect(maskPhone("1133334444")).toBe("(11) 3333-4444");
+    expect(maskPhone("+5511999998888")).toBe("(11) 99999-8888");
+    expect(maskPhone("119")).toBe("(11) 9");
+  });
+  it("valida o formulário de entrega", () => {
+    const ok = { cep: "01310-100", street: "Av. Paulista", number: "1000", complement: "", neighborhood: "Bela Vista", city: "São Paulo", state: "SP" };
+    expect(validateDelivery("Ana Souza", "(11) 99999-8888", ok)).toBe("");
+    expect(validateDelivery("A", "(11) 99999-8888", ok)).toMatch(/nome/i);
+    expect(validateDelivery("Ana", "123", ok)).toMatch(/telefone/i);
+    expect(validateDelivery("Ana", "(11) 99999-8888", { ...ok, cep: "123" })).toMatch(/CEP/);
+    expect(validateDelivery("Ana", "(11) 99999-8888", { ...ok, state: "" })).toMatch(/estado/i);
+    expect(validateDelivery("Ana", "(11) 99999-8888", { ...ok, number: " " })).toMatch(/número/i);
   });
 });
 

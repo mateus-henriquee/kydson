@@ -367,7 +367,7 @@ function ProductForm({
 
       <section className="adm-card">
         <h2>Fotos</h2>
-        <p className="adm-muted">JPG, PNG ou WebP, até 6 MB cada (máx. 8). Use as setas para mudar a ordem: a primeira é a principal e a segunda aparece no site quando o cliente passa o mouse sobre o produto.</p>
+        <p className="adm-muted">JPG, PNG ou WebP, até 4 MB cada (máx. 8). Use as setas para mudar a ordem: a primeira é a principal e a segunda aparece no site quando o cliente passa o mouse sobre o produto.</p>
         {photos.length > 0 && (
           <ul className="adm-photos">
             {photos.map((url, i) => (

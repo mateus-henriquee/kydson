@@ -5,7 +5,7 @@ export function Footer() {
   return (
     <footer className="footer">
       <Logo />
-      <p>O envio ao WhatsApp encaminha o pedido para confirmação pela loja. Não há pagamento online no site.</p>
+      <p>Pagamento pelo site via Mercado Pago. Dúvidas? Fale com a loja pelo WhatsApp.</p>
       <span className="footer__links">
         <a href={STORE.instagramUrl} target="_blank" rel="noopener noreferrer">
           {STORE.instagramHandle}

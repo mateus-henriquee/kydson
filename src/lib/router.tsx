@@ -5,6 +5,10 @@ export type Route =
   | { name: "home" }
   | { name: "catalog"; category: CategoryId | null }
   | { name: "product"; id: number }
+  | { name: "login" }
+  | { name: "account" }
+  | { name: "checkout" }
+  | { name: "order"; id: number }
   | { name: "notfound" };
 
 /** Interpreta o caminho da URL. Aceita barra final. */
@@ -16,9 +20,15 @@ export function parseRoute(pathname: string): Route {
     const category = parts.length === 2 ? categoryFromSlug(parts[1]) : null;
     return category ? { name: "catalog", category } : { name: "notfound" };
   }
-  if (parts[0] === "produto" && parts.length === 2) {
+  if ((parts[0] === "produto" || parts[0] === "pedido") && parts.length === 2) {
     const id = Number(parts[1]);
-    return Number.isInteger(id) && id > 0 ? { name: "product", id } : { name: "notfound" };
+    if (!Number.isInteger(id) || id <= 0) return { name: "notfound" };
+    return parts[0] === "produto" ? { name: "product", id } : { name: "order", id };
+  }
+  if (parts.length === 1) {
+    if (parts[0] === "entrar") return { name: "login" };
+    if (parts[0] === "conta") return { name: "account" };
+    if (parts[0] === "finalizar") return { name: "checkout" };
   }
   return { name: "notfound" };
 }
