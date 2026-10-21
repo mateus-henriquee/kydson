@@ -787,3 +787,81 @@ html,
   border: 2px solid transparent;
   background-clip: padding-box;
 }
+
+/* ===== Calçados: cores, tamanhos, estoque por variação ===== */
+.adm-shoe__h {
+  margin: 22px 0 8px;
+  font-size: 15px;
+}
+.adm-chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.adm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid currentColor;
+  background: #fff;
+}
+.adm-chip__dot {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  vertical-align: -2px;
+}
+.adm-chip__x {
+  border: 0;
+  background: #111;
+  color: #fff;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.adm-shoe__add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 8px 0;
+}
+.adm-shoe__add input[type="color"] {
+  width: 48px;
+  height: 44px;
+  padding: 2px;
+}
+.adm-sizes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.adm-size {
+  min-width: 48px;
+  min-height: 40px;
+  border: 1px solid currentColor;
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.adm-size[aria-pressed="true"] {
+  background: #111;
+  color: #fff;
+}
+.adm-stockinput {
+  width: 88px;
+  text-align: right;
+}
+.adm-table .adm-stockinput {
+  width: 88px;
+  min-width: 0;
+}

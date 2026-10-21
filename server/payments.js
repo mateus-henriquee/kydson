@@ -31,7 +31,7 @@ export function createMercadoPago({ accessToken, webhookSecret, baseUrl = "https
     webhookSecret,
 
     /** Cria o link de pagamento. Valores em reais (número) como o Mercado Pago exige. */
-    async createPreference({ order, items, payer, siteUrl, expiresAt }) {
+    async createPreference({ order, items, payer, siteUrl, expiresAt, shippingCents = 0 }) {
       const https = siteUrl.startsWith("https://");
       const back = `${siteUrl}/pedido/${order.id}`;
       const body = {
@@ -49,6 +49,7 @@ export function createMercadoPago({ accessToken, webhookSecret, baseUrl = "https
         expires: true,
         expiration_date_to: brOffset(new Date(expiresAt)),
       };
+      if (shippingCents > 0) body.items.push({ id: "frete", title: "Frete", quantity: 1, unit_price: shippingCents / 100, currency_id: "BRL" });
       // O Mercado Pago só aceita retorno automático e aviso (webhook) em endereço https público.
       if (https) {
         body.auto_return = "approved";

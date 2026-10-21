@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { cartReducer, clampQty, itemCount, parseStoredLines, priceLines, totalCents } from "./cart";
 import { centsToInput, formatBRL, parseMoneyInput } from "./money";
 import { buildOrderMessage, buildWhatsAppUrl, normalizePhone } from "./whatsapp";
-import { discountPct, type Product } from "../data/products";
+import { categoryFromSlug, discountPct, type Product } from "../data/products";
 import { applyFilters, collectColors, collectSizes, EMPTY_FILTERS, hasActiveFilters, priceBounds, recommend } from "./catalogFilter";
 import { parseRoute } from "./router";
+import { findVariation, sizesFor } from "./variants";
 import { maskCep, maskPhone, validateDelivery } from "./address";
 
 const prod = (over: Partial<Product>): Product => ({
@@ -241,5 +242,32 @@ describe("entrada de dinheiro", () => {
   it("formata para edição", () => {
     expect(centsToInput(12990)).toBe("129,90");
     expect(centsToInput(null)).toBe("");
+  });
+});
+
+describe("calçados: tamanhos por cor", () => {
+  const shoe = {
+    id: 1, name: "Bota", description: "", category: "calcado", priceCents: 1000, compareAtCents: null, featured: false, launch: false, stock: 24,
+    colors: [{ name: "Marrom", hex: "#7b4a33" }, { name: "Preto", hex: "#000000" }],
+    variations: [
+      { label: "41", color: "Marrom", stock: 13 },
+      { label: "38", color: "Marrom", stock: 5 },
+      { label: "9", color: "Marrom", stock: 1 },
+      { label: "40", color: "Preto", stock: 2 },
+    ],
+    images: [],
+  } as Product;
+  it("ordena os tamanhos em ordem crescente e só mostra os da cor", () => {
+    expect(sizesFor(shoe, "Marrom").map((v) => v.label)).toEqual(["9", "38", "41"]);
+    expect(sizesFor(shoe, "Preto").map((v) => v.label)).toEqual(["40"]);
+  });
+  it("acha a variação certa por cor e aceita variação antiga sem cor", () => {
+    expect(findVariation(shoe, "38", "Marrom")?.stock).toBe(5);
+    expect(findVariation(shoe, "38", "Preto")).toBeUndefined();
+    const old = { ...shoe, variations: [{ label: "42", stock: 3 }] } as Product;
+    expect(findVariation(old, "42", "Preto")?.stock).toBe(3);
+  });
+  it("reconhece a rota /catalogo/calcados", () => {
+    expect(categoryFromSlug("calcados")).toBe("calcado");
   });
 });

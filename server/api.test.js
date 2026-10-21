@@ -31,6 +31,16 @@ const provider = {
   async updateUser(id, attrs) {
     adminCalls.push([id, attrs]);
   },
+  confirmed: new Set(),
+  async confirmedMap() {
+    return new Map([...accounts.values()].map((a) => [a.id, provider.confirmed.has(a.id)]));
+  },
+  async confirmEmail(id) {
+    provider.confirmed.add(id);
+  },
+  async recoveryLink(email, redirectTo) {
+    return `https://sb.test/verify?email=${encodeURIComponent(email)}&redirect_to=${encodeURIComponent(redirectTo)}`;
+  },
 };
 
 const payments = new Map(); // id -> pagamento do Mercado Pago (simulado)
@@ -171,7 +181,7 @@ describe("produtos e fotos", () => {
     assert.equal(ok.json.product.stock, 7);
     const id = ok.json.product.id;
     assert.equal((await o.post("/api/products", product({ variations: [{ label: "A", stock: 1 }, { label: "a", stock: 1 }] }))).status, 400);
-    assert.equal((await o.post("/api/products", product({ category: "calcado" }))).status, 400);
+    assert.equal((await o.post("/api/products", product({ category: "bota" }))).status, 400);
     assert.equal((await o.post("/api/products", product({ priceCents: 10.5 }))).status, 400);
     assert.equal((await o.post("/api/products", product({ priceCents: 1000, promoPriceCents: 2000 }))).status, 400);
     assert.equal((await o.post("/api/products", product({ name: "  " }))).status, 400);
@@ -282,7 +292,7 @@ describe("checkout (conta obrigatória)", () => {
     const ok = await c.post("/api/checkout", checkoutBody([{ productId: p.id, color: "Preto", variation: "40", qty: 1 }]));
     assert.equal(ok.status, 201);
     const s = await stockOf(p.id);
-    assert.deepEqual(s.variations, [{ label: "40", stock: 1 }, { label: "41", stock: 0 }]);
+    assert.deepEqual(s.variations, [{ label: "40", color: "", stock: 1 }, { label: "41", color: "", stock: 0 }]);
     assert.equal(s.stock, 1);
   });
 
@@ -695,5 +705,101 @@ describe("cálculo do dashboard", () => {
     assert.throws(() => parseRange("2026-05-01", "2026-04-01"));
     assert.deepEqual(parseRange("2026-05-01", "2026-10-20"), { from: "2026-05-01", to: "2026-10-20" });
     assert.equal(parseRange(undefined, undefined, new Date("2026-10-20T15:00:00Z")).from, "2026-05-01");
+  });
+});
+
+
+describe("calçados, perfis, clientes e configurações", () => {
+  let owner;
+  before(async () => {
+    owner = await as("dono-cal@x.com", "owner");
+  });
+  const shoe = (over = {}) =>
+    product({
+      name: "Bota Teste",
+      category: "calcado",
+      colors: [{ name: "Marrom", hex: "#7b4a33" }, { name: "Preto", hex: "#000000" }],
+      variations: [
+        { label: "41", color: "Marrom", stock: 13 },
+        { label: "38", color: "Marrom", stock: 5 },
+        { label: "40", color: "Preto", stock: 2 },
+        { label: "39", color: "Marrom", stock: 3 },
+        { label: "38", color: "Preto", stock: 1 },
+      ],
+      ...over,
+    });
+
+  it("aceita Calçado e guarda os tamanhos em ordem crescente por cor", async () => {
+    const r = await owner.post("/api/products", shoe());
+    assert.equal(r.status, 201);
+    assert.deepEqual(r.json.product.variations.map((v) => `${v.color}-${v.label}`), ["Marrom-38", "Marrom-39", "Marrom-41", "Preto-38", "Preto-40"]);
+    assert.equal(r.json.product.stock, 24);
+    assert.equal((await owner.post("/api/products", shoe({ variations: [{ label: "38", color: "Verde", stock: 1 }] }))).status, 400);
+    assert.equal((await owner.post("/api/products", shoe({ variations: [{ label: "38", color: "Preto", stock: 1 }, { label: "38", color: "preto", stock: 2 }] }))).status, 400);
+  });
+
+  it("estoque é por cor × tamanho: reserva, mostra 'reservado' e devolve ao cancelar", async () => {
+    const p = (await owner.post("/api/products", shoe({ name: "Bota Estoque" }))).json.product;
+    const c = await as("cli-bota@x.com");
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, variation: "38", color: "Marrom", qty: 6 }]))).status, 400); // só 5
+    const r = await c.post("/api/checkout", checkoutBody([{ productId: p.id, variation: "38", color: "Marrom", qty: 2 }]));
+    assert.equal(r.status, 201);
+    const v = (await stockOf(p.id)).variations;
+    assert.equal(v.find((x) => x.label === "38" && x.color === "Marrom").stock, 3);
+    assert.equal(v.find((x) => x.label === "38" && x.color === "Preto").stock, 1); // outra cor intacta
+    const listed = (await owner.get("/api/products")).json.products.find((x) => x.id === p.id);
+    assert.equal(listed.variations.find((x) => x.label === "38" && x.color === "Marrom").reserved, 2);
+    assert.equal((await c.post(`/api/my/orders/${r.json.orderId}/cancel`, {})).status, 200);
+    assert.equal((await stockOf(p.id)).variations.find((x) => x.label === "38" && x.color === "Marrom").stock, 5);
+  });
+
+  it("perfil Estoque só mexe em produtos; Atendimento não entra em Equipe/Configurações", async () => {
+    const st = await as("estoque@x.com", "stock");
+    assert.equal((await st.get("/api/products")).status, 200);
+    assert.equal((await st.post("/api/products", product({ name: "Do Estoque" }))).status, 201);
+    for (const path of ["/api/orders", "/api/customers", "/api/dashboard?from=2026-01-01&to=2026-12-31", "/api/users", "/api/settings"])
+      assert.equal((await st.get(path)).status, 403, path);
+    const at = await as("atend@x.com", "staff");
+    assert.equal((await at.get("/api/customers")).status, 200);
+    assert.equal((await at.get("/api/settings")).status, 403);
+    assert.equal((await owner.post("/api/users", { name: "Novo Estoque", email: "novo-est@x.com", password: "senha-forte-1", role: "stock" })).status, 201);
+    assert.equal((await owner.post("/api/users", { name: "X", email: "x2@x.com", password: "senha-forte-1", role: "admin" })).status, 400);
+  });
+
+  it("clientes: busca, status do e-mail, confirmar e link de senha", async () => {
+    const c = await as("maria-lista@x.com", "customer", "Maria Lista");
+    const at = await as("atend2@x.com", "staff");
+    const all = (await at.get("/api/customers")).json.customers;
+    const me = all.find((x) => x.email === "maria-lista@x.com");
+    assert.ok(me);
+    assert.equal(me.emailConfirmed, false);
+    assert.ok(!all.some((x) => x.email === "atend2@x.com")); // colaboradores não aparecem
+    assert.equal((await at.get("/api/customers?q=maria-lista")).json.customers.length, 1);
+    assert.equal((await at.get("/api/customers?q=zzzz-nao-existe")).json.customers.length, 0);
+    assert.equal((await at.post(`/api/customers/${c.id}/confirm-email`, {})).status, 200);
+    assert.equal((await at.get("/api/customers?q=maria-lista")).json.customers[0].emailConfirmed, true);
+    const link = await at.post(`/api/customers/${c.id}/reset-link`, {});
+    assert.match(link.json.link, /^https:\/\/sb\.test\/verify\?email=maria-lista%40x\.com/);
+    assert.equal((await at.post(`/api/customers/${at.id}/confirm-email`, {})).status, 404); // só clientes
+    assert.equal((await c.get("/api/customers")).status, 403);
+  });
+
+  it("frete e prazo de reserva: valida, entra no total e no Mercado Pago", async () => {
+    assert.equal((await owner.put("/api/settings", { shippingCents: -1, reserveMinutes: 30 })).status, 400);
+    assert.equal((await owner.put("/api/settings", { shippingCents: 1000, reserveMinutes: 1 })).status, 400);
+    const ok = await owner.put("/api/settings", { shippingCents: 1500, reserveMinutes: 45 });
+    assert.equal(ok.json.settings.shippingCents, 1500);
+    assert.equal((await anon().get("/api/catalog")).json.shippingCents, 1500);
+    const p = (await owner.post("/api/products", product({ name: "Com Frete", priceCents: 10000, stock: 5 }))).json.product;
+    const c = await as("cli-frete@x.com");
+    const r = await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]));
+    const o = await status(r.json.orderId);
+    assert.equal(o.total_cents, 11500);
+    assert.equal(o.shipping_cents, 1500);
+    const mins = (new Date(o.expires_at).getTime() - Date.now()) / 60000;
+    assert.ok(mins > 43 && mins <= 45, String(mins));
+    assert.equal(prefs.at(-1).shippingCents, 1500);
+    assert.equal((await owner.get("/api/settings")).json.payments.configured, true);
+    await owner.put("/api/settings", { shippingCents: 0, reserveMinutes: 30 });
   });
 });

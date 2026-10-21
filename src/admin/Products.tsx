@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { centsToInput, formatBRL, parseMoneyInput } from "../lib/money";
 import { api, ApiError } from "./api";
 import { Confirm } from "./Confirm";
+import { ShoeStock, shoeVariations, sortSizes, stockKey } from "./ShoeStock";
 import { CATEGORIES, categoryLabel, type AdminProduct, type Category, type ProductInput, type ProductColor, type Variation } from "./types";
 
 const LOW_STOCK = 3;
@@ -210,10 +211,17 @@ function ProductForm({
   const [launch, setLaunch] = useState(product?.launch ?? false);
   const [active, setActive] = useState(product?.active ?? true);
   const [photos, setPhotos] = useState<string[]>(product?.photos ?? []);
+  const wasShoe = product?.category === "calcado";
   const [useVariations, setUseVariations] = useState((product?.variations.length ?? 0) > 0);
   const [variations, setVariations] = useState<{ label: string; stock: string }[]>(
-    product?.variations.map((v) => ({ label: v.label, stock: String(v.stock) })) ?? [],
+    (!wasShoe && product?.variations.map((v) => ({ label: v.label, stock: String(v.stock) }))) || [],
   );
+  // Calçado: tamanhos escolhidos + estoque por (cor, tamanho).
+  const [sizes, setSizes] = useState<string[]>(() => (wasShoe ? sortSizes([...new Set(product!.variations.map((v) => v.label))]) : []));
+  const [shoeStocks, setShoeStocks] = useState<Record<string, string>>(() =>
+    wasShoe ? Object.fromEntries(product!.variations.map((v) => [stockKey(v.color ?? "", v.label), String(v.stock)])) : {},
+  );
+  const isShoe = category === "calcado";
   const [colors, setColors] = useState<ProductColor[]>(product?.colors ?? []);
   const [stock, setStock] = useState(String(product?.stock ?? 0));
   const [error, setError] = useState("");
@@ -262,7 +270,12 @@ function ProductForm({
 
     let vars: Variation[] = [];
     let stockN = 0;
-    if (useVariations) {
+    if (isShoe) {
+      if (sizes.length === 0) return setError("Escolha ao menos um tamanho.");
+      vars = shoeVariations(colors, sizes, shoeStocks);
+      if (vars.some((v) => !Number.isInteger(v.stock) || v.stock < 0)) return setError("Estoque inválido: use números inteiros (0 ou mais).");
+      stockN = vars.reduce((n, v) => n + v.stock, 0);
+    } else if (useVariations) {
       const labels = new Set<string>();
       for (const v of variations) {
         const label = v.label.trim();
@@ -399,6 +412,19 @@ function ProductForm({
         {uploading && <p className="adm-muted">Enviando…</p>}
       </section>
 
+      {isShoe && (
+        <ShoeStock
+          colors={colors}
+          setColors={setColors}
+          sizes={sizes}
+          setSizes={setSizes}
+          stocks={shoeStocks}
+          setStocks={setShoeStocks}
+          reserved={(color, size) => product?.variations.find((v) => v.label === size && (v.color ?? "") === color)?.reserved ?? 0}
+        />
+      )}
+
+      {!isShoe && (
       <section className="adm-card">
         <h2>Estoque</h2>
         <label className="adm-checks">
@@ -440,6 +466,9 @@ function ProductForm({
         )}
       </section>
 
+      )}
+
+      {!isShoe && (
       <section className="adm-card">
         <h2>Cores</h2>
         <p className="adm-muted">Opcional. Aparecem no site como uma bolinha com o nome da cor e entram no filtro por cor.</p>
@@ -464,6 +493,7 @@ function ProductForm({
           Adicionar cor
         </button>
       </section>
+      )}
 
       {error && (
         <p className="adm-error" role="alert">

@@ -2,7 +2,6 @@ import express from "express";
 import { createAuth, HttpError } from "./auth.js";
 import { buildDashboard, parseRange } from "./dashboard.js";
 import {
-  PENDING_MINUTES,
   MAX_PENDING_PER_USER,
   STAFF_ORDER_SQL,
   cancelAny,
@@ -15,6 +14,7 @@ import {
 } from "./orders.js";
 import { applyPayment, handleWebhook } from "./payments.js";
 import { parseCheckout, parseId, parseOrder, parseProduct, parseProfile, parseUser, parseUuid } from "./validate.js";
+import { getSettings, parseSettings, saveSettings } from "./settings.js";
 import { notifyOrderPaid } from "./whatsapp.js";
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -72,7 +72,9 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       await sweep(); // devolve ao estoque o que passou do prazo sem pagamento
       const { rows } = await db.query("select * from products where active = true order by id desc");
       res.setHeader("Cache-Control", "no-cache");
+      const settings = await getSettings(db);
       res.json({
+        shippingCents: settings.shippingCents,
         products: rows.map((r) => {
           const promo = r.promo_price_cents !== null && r.promo_price_cents < r.price_cents;
           return {
@@ -184,7 +186,8 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       const pending = (await db.query("select count(*)::int as n from orders where customer_id = $1 and status = 'pending'", [req.user.id])).rows[0].n;
       if (pending >= MAX_PENDING_PER_USER) throw new HttpError(429, "Você já tem pedidos aguardando pagamento. Pague ou cancele um deles.");
 
-      const expiresAt = new Date(Date.now() + PENDING_MINUTES * 60_000);
+      const settings = await getSettings(db);
+      const expiresAt = new Date(Date.now() + settings.reserveMinutes * 60_000);
       const { order, lines } = await db.tx(async (t) => {
         const lines = await reserveItems(t, input.items);
         const order = await insertOrder(
@@ -198,6 +201,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
             shipping: input.shipping,
             status: "pending",
             expiresAt,
+            shippingCents: settings.shippingCents,
           },
           lines,
         );
@@ -214,6 +218,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
           payer: { name: input.name, email: req.user.email },
           siteUrl: baseUrl(req),
           expiresAt,
+          shippingCents: settings.shippingCents,
         });
         if (!pref?.url) throw new Error("sem link de pagamento");
       } catch (e) {
@@ -231,10 +236,24 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
   /* ---------- produtos / estoque ---------- */
   router.get(
     "/products",
-    auth.staff,
+    auth.panel,
     wrap(async (_req, res) => {
       const { rows } = await db.query("select * from products order by lower(name)");
-      res.json({ products: rows.map(productOut) });
+      // "Reservado" = itens de pedidos do site aguardando pagamento (já saíram do estoque).
+      const held = (
+        await db.query(
+          `select oi.product_id, oi.variation, oi.color, sum(oi.qty)::int as q from order_items oi join orders o on o.id = oi.order_id
+           where o.status = 'pending' and oi.product_id is not null group by 1,2,3`,
+        )
+      ).rows;
+      const out = rows.map(productOut).map((p) => ({
+        ...p,
+        variations: (p.variations ?? []).map((v) => ({
+          ...v,
+          reserved: held.filter((h) => h.product_id === p.id && h.variation === v.label && (h.color ?? "") === (v.color ?? "")).reduce((n, h) => n + h.q, 0),
+        })),
+      }));
+      res.json({ products: out });
     }),
   );
 
@@ -242,7 +261,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
 
   router.post(
     "/products",
-    auth.staff,
+    auth.panel,
     wrap(async (req, res) => {
       const p = parseProduct(req.body, { ownsPhoto: storage.owns });
       const { rows } = await db.query(
@@ -256,7 +275,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
 
   router.put(
     "/products/:id",
-    auth.staff,
+    auth.panel,
     wrap(async (req, res) => {
       const id = parseId(req.params.id);
       const p = parseProduct(req.body, { ownsPhoto: storage.owns });
@@ -274,7 +293,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
 
   router.delete(
     "/products/:id",
-    auth.staff,
+    auth.panel,
     wrap(async (req, res) => {
       const id = parseId(req.params.id);
       const old = (await db.query("select photos from products where id = $1", [id])).rows[0];
@@ -297,7 +316,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
   /* ---------- upload de fotos ---------- */
   router.post(
     "/uploads",
-    auth.staff,
+    auth.panel,
     express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: MAX_UPLOAD }),
     wrap(async (req, res) => {
       const buf = req.body;
@@ -404,7 +423,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
     "/users",
     auth.owner,
     wrap(async (_req, res) => {
-      const { rows } = await db.query("select * from profiles where role in ('staff','owner') order by lower(name)");
+      const { rows } = await db.query("select * from profiles where role in ('stock','staff','owner') order by lower(name)");
       res.json({ users: rows.map(teamOut) });
     }),
   );
@@ -437,7 +456,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
     auth.owner,
     wrap(async (req, res) => {
       const id = parseUuid(req.params.id);
-      const cur = (await db.query("select * from profiles where id = $1 and role in ('staff','owner')", [id])).rows[0];
+      const cur = (await db.query("select * from profiles where id = $1 and role in ('stock','staff','owner')", [id])).rows[0];
       if (!cur) throw new HttpError(404, "Usuário não encontrado.");
       const u = parseUser(req.body, { partial: true });
       const nextRole = u.role ?? cur.role;
@@ -447,6 +466,86 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       if (u.password) await provider.updateUser(id, { password: u.password });
       if (u.active !== undefined) await provider.updateUser(id, { banned: !u.active }).catch(() => {});
       res.json({ user: teamOut(rows[0]) });
+    }),
+  );
+
+  /* ---------- clientes (colaboradores de vendas) ---------- */
+  router.get(
+    "/customers",
+    auth.staff,
+    wrap(async (req, res) => {
+      const q = String(req.query.q ?? "").trim().toLowerCase().slice(0, 80);
+      const like = `%${q.replace(/[%_\\]/g, "")}%`;
+      const { rows } = await db.query(
+        `select p.id, p.name, p.email, p.phone, p.created_at, p.active,
+                (select count(*)::int from orders o where o.customer_id = p.id and o.status = 'paid') as paid_orders
+           from profiles p
+          where p.role = 'customer' and ($1 = '%%' or lower(p.name) like $1 or lower(p.email) like $1 or p.phone like $1)
+          order by p.created_at desc limit 200`,
+        [like],
+      );
+      let confirmed = new Map();
+      try {
+        confirmed = await provider.confirmedMap();
+      } catch {
+        /* sem status de e-mail: mostra "—" */
+      }
+      res.json({
+        customers: rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          phone: r.phone,
+          createdAt: iso(r.created_at),
+          active: r.active,
+          paidOrders: r.paid_orders,
+          emailConfirmed: confirmed.has(r.id) ? confirmed.get(r.id) : null,
+        })),
+      });
+    }),
+  );
+
+  const customerOf = async (req) => {
+    const id = parseUuid(req.params.id);
+    const c = (await db.query("select * from profiles where id = $1 and role = 'customer'", [id])).rows[0];
+    if (!c) throw new HttpError(404, "Cliente não encontrado.");
+    return c;
+  };
+
+  router.post(
+    "/customers/:id/confirm-email",
+    auth.staff,
+    wrap(async (req, res) => {
+      const c = await customerOf(req);
+      await provider.confirmEmail(c.id);
+      res.json({ ok: true });
+    }),
+  );
+
+  router.post(
+    "/customers/:id/reset-link",
+    auth.staff,
+    wrap(async (req, res) => {
+      const c = await customerOf(req);
+      res.json({ link: await provider.recoveryLink(c.email, `${baseUrl(req)}/entrar`) });
+    }),
+  );
+
+  /* ---------- configurações (somente proprietário) ---------- */
+  router.get(
+    "/settings",
+    auth.owner,
+    wrap(async (_req, res) => {
+      res.json({ settings: await getSettings(db), payments: { provider: "Mercado Pago", configured: !!mp.enabled }, whatsapp: { configured: !!wa.enabled } });
+    }),
+  );
+
+  router.put(
+    "/settings",
+    auth.owner,
+    wrap(async (req, res) => {
+      await saveSettings(db, parseSettings(req.body));
+      res.json({ settings: await getSettings(db) });
     }),
   );
 

@@ -3,13 +3,15 @@ import "./admin.css";
 import { AuthProvider, useAuth } from "../state/AuthContext";
 import type { SessionUser } from "./types";
 import { Login } from "./Login";
-import { Shell, type Route } from "./Shell";
+import { allowedRoutes, Shell, type Route } from "./Shell";
 
 const PATHS: Record<Route, string> = {
   dashboard: "/painel",
   produtos: "/painel/produtos",
   pedidos: "/painel/pedidos",
+  clientes: "/painel/clientes",
   equipe: "/painel/equipe",
+  configuracoes: "/painel/configuracoes",
 };
 
 function routeFromPath(path: string): Route {
@@ -65,8 +67,9 @@ function Inner() {
   }
 
   const user: SessionUser = { id: auth.user.id, name: auth.user.name, email: auth.user.email, role: auth.user.role };
-  // Rota restrita: colaborador comum não acessa Equipe.
-  const effective: Route = route === "equipe" && user.role !== "owner" ? "dashboard" : route;
+  // Rota restrita ao perfil: se não pode, vai para a primeira tela permitida.
+  const allowed = allowedRoutes(user.role);
+  const effective: Route = allowed.includes(route) ? route : allowed[0];
   return <Shell user={user} route={effective} go={go} onLogout={() => void auth.signOut()} />;
 }
 

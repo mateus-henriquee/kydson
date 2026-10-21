@@ -191,6 +191,7 @@ export function Orders() {
 /* ---------- novo pedido ---------- */
 interface Line {
   productId: string;
+  color: string;
   variation: string;
   qty: string;
 }
@@ -200,7 +201,7 @@ function OrderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: (id: 
   const [customerName, setCustomerName] = useState("");
   const [note, setNote] = useState("");
   const [paid, setPaid] = useState(true);
-  const [lines, setLines] = useState<Line[]>([{ productId: "", variation: "", qty: "1" }]);
+  const [lines, setLines] = useState<Line[]>([{ productId: "", color: "", variation: "", qty: "1" }]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -223,14 +224,15 @@ function OrderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: (id: 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
-    const items: { productId: number; variation: string; qty: number }[] = [];
+    const items: { productId: number; variation: string; color: string; qty: number }[] = [];
     for (const l of lines) {
       const p = byId.get(l.productId);
       const qty = Number(l.qty);
       if (!p) return setError("Escolha o produto em todas as linhas.");
       if (!Number.isInteger(qty) || qty < 1) return setError("Quantidade inválida.");
-      if (p.variations.length && !l.variation) return setError(`Escolha a variação de ${p.name}.`);
-      items.push({ productId: p.id, variation: l.variation, qty });
+      if (p.colors.length && !l.color) return setError(`Escolha a cor de ${p.name}.`);
+      if (p.variations.length && !l.variation) return setError(`Escolha o tamanho/variação de ${p.name}.`);
+      items.push({ productId: p.id, variation: l.variation, color: l.color, qty });
     }
     setBusy(true);
     try {
@@ -273,7 +275,7 @@ function OrderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: (id: 
                 <li key={i} className="adm-lineitem">
                   <label>
                     Produto
-                    <select value={l.productId} onChange={(e) => setLine(i, { productId: e.target.value, variation: "" })}>
+                    <select value={l.productId} onChange={(e) => setLine(i, { productId: e.target.value, color: "", variation: "" })}>
                       <option value="">Selecione…</option>
                       {products.map((x) => (
                         <option key={x.id} value={x.id} disabled={x.stock === 0}>
@@ -282,16 +284,32 @@ function OrderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: (id: 
                       ))}
                     </select>
                   </label>
+                  {p && p.colors.length > 0 && (
+                    <label>
+                      Cor
+                      <select value={l.color} onChange={(e) => setLine(i, { color: e.target.value, variation: "" })}>
+                        <option value="">Selecione…</option>
+                        {p.colors.map((c) => (
+                          <option key={c.name} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   {p && p.variations.length > 0 && (
                     <label>
-                      Variação
+                      Tamanho / variação
                       <select value={l.variation} onChange={(e) => setLine(i, { variation: e.target.value })}>
                         <option value="">Selecione…</option>
-                        {p.variations.map((v) => (
+                        {p.variations
+                          .filter((v) => !v.color || v.color === l.color)
+                          .sort((a, b) => a.label.localeCompare(b.label, "pt-BR", { numeric: true }))
+                          .map((v) => (
                           <option key={v.label} value={v.label} disabled={v.stock === 0}>
                             {v.label} ({v.stock})
                           </option>
-                        ))}
+                          ))}
                       </select>
                     </label>
                   )}
@@ -309,7 +327,7 @@ function OrderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: (id: 
             })}
           </ul>
         )}
-        <button type="button" className="adm-btn adm-btn--sm" onClick={() => setLines((a) => [...a, { productId: "", variation: "", qty: "1" }])}>
+        <button type="button" className="adm-btn adm-btn--sm" onClick={() => setLines((a) => [...a, { productId: "", color: "", variation: "", qty: "1" }])}>
           Adicionar item
         </button>
         <p className="adm-total">

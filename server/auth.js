@@ -5,7 +5,8 @@ export class HttpError extends Error {
   }
 }
 
-export const STAFF_ROLES = ["staff", "owner"];
+export const STAFF_ROLES = ["staff", "owner"]; // pedidos, clientes, painel completo de vendas
+export const PANEL_ROLES = ["stock", "staff", "owner"]; // quem entra no painel (stock = só produtos e estoque)
 
 /**
  * Login é do Supabase Auth: o navegador entra e recebe um token; a API só confere esse token.
@@ -54,6 +55,10 @@ export function createAuth({ db, provider }) {
     user: wrap(),
     staff: wrap((req) => {
       if (!STAFF_ROLES.includes(req.user.role)) throw new HttpError(403, "Acesso restrito a colaboradores.");
+    }),
+    /** Qualquer perfil do painel (inclui "Estoque"). */
+    panel: wrap((req) => {
+      if (!PANEL_ROLES.includes(req.user.role)) throw new HttpError(403, "Acesso restrito a colaboradores.");
     }),
     owner: wrap((req) => {
       if (req.user.role !== "owner") throw new HttpError(403, "Apenas o proprietário pode fazer isso.");

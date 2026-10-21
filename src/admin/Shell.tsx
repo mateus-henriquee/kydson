@@ -1,18 +1,25 @@
 import { LOGO_SRC } from "../components/Logo";
-import type { SessionUser } from "./types";
+import { ROLE_LABEL, type Role, type SessionUser } from "./types";
 import { Dashboard } from "./Dashboard";
 import { Products } from "./Products";
 import { Orders } from "./Orders";
 import { Team } from "./Team";
+import { Customers } from "./Customers";
+import { Settings } from "./Settings";
 
-export type Route = "dashboard" | "produtos" | "pedidos" | "equipe";
+export type Route = "dashboard" | "produtos" | "pedidos" | "clientes" | "equipe" | "configuracoes";
 
-const NAV: { id: Route; label: string; ownerOnly?: boolean }[] = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "produtos", label: "Produtos e Estoque" },
-  { id: "pedidos", label: "Pedidos" },
-  { id: "equipe", label: "Equipe", ownerOnly: true },
+/** Quem vê o quê. Estoque: só produtos. Atendimento: vendas. Proprietário: tudo. */
+const NAV: { id: Route; label: string; roles: Role[] }[] = [
+  { id: "dashboard", label: "Dashboard", roles: ["owner", "staff"] },
+  { id: "produtos", label: "Produtos e Estoque", roles: ["owner", "staff", "stock"] },
+  { id: "pedidos", label: "Pedidos", roles: ["owner", "staff"] },
+  { id: "clientes", label: "Clientes", roles: ["owner", "staff"] },
+  { id: "equipe", label: "Equipe", roles: ["owner"] },
+  { id: "configuracoes", label: "Configurações", roles: ["owner"] },
 ];
+
+export const allowedRoutes = (role: Role): Route[] => NAV.filter((n) => n.roles.includes(role)).map((n) => n.id);
 
 export function Shell({ user, route, go, onLogout }: { user: SessionUser; route: Route; go: (r: Route) => void; onLogout: () => void }) {
   return (
@@ -23,7 +30,7 @@ export function Shell({ user, route, go, onLogout }: { user: SessionUser; route:
         </a>
 
         <nav aria-label="Painel">
-          {NAV.filter((n) => !n.ownerOnly || user.role === "owner").map((n) => (
+          {NAV.filter((n) => n.roles.includes(user.role)).map((n) => (
             <a
               key={n.id}
               href={n.id === "dashboard" ? "/painel" : `/painel/${n.id}`}
@@ -38,7 +45,7 @@ export function Shell({ user, route, go, onLogout }: { user: SessionUser; route:
 
         <div className="adm-side__user">
           <strong>{user.name}</strong>
-          <span>{user.role === "owner" ? "Proprietário" : "Colaborador"}</span>
+          <span>{ROLE_LABEL[user.role]}</span>
           <button className="adm-btn adm-btn--onDark" onClick={onLogout}>
             Sair
           </button>
@@ -49,7 +56,9 @@ export function Shell({ user, route, go, onLogout }: { user: SessionUser; route:
         {route === "dashboard" && <Dashboard />}
         {route === "produtos" && <Products />}
         {route === "pedidos" && <Orders />}
+        {route === "clientes" && <Customers />}
         {route === "equipe" && user.role === "owner" && <Team me={user} />}
+        {route === "configuracoes" && user.role === "owner" && <Settings />}
       </main>
     </div>
   );

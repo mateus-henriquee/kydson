@@ -1,4 +1,4 @@
-import type { AdminProduct, DashboardData, Order, ProductInput, Role, TeamUser } from "./types";
+import type { AdminProduct, Customer, StoreSettings, DashboardData, Order, ProductInput, Role, TeamUser } from "./types";
 import { ApiError, request as http } from "../lib/http";
 
 export { ApiError };
@@ -30,7 +30,7 @@ export const api = {
     customerName: string;
     note: string;
     paid: boolean;
-    items: { productId: number; variation: string; qty: number }[];
+    items: { productId: number; variation: string; color: string; qty: number }[];
   }) => request<{ order: Order }>("POST", "/api/orders", o),
   orderAction: (id: number, action: "pay" | "cancel" | "resend-whatsapp" | "resolve") => request<{ order: Order }>("PATCH", `/api/orders/${id}`, { action }),
 
@@ -39,4 +39,11 @@ export const api = {
     request<{ user: TeamUser }>("POST", "/api/users", u),
   updateUser: (id: string, patch: Partial<{ name: string; role: Role; active: boolean; password: string }>) =>
     request<{ user: TeamUser }>("PATCH", `/api/users/${id}`, patch),
+
+  customers: (q: string) => request<{ customers: Customer[] }>("GET", `/api/customers?q=${encodeURIComponent(q)}`),
+  confirmCustomerEmail: (id: string) => request<{ ok: true }>("POST", `/api/customers/${id}/confirm-email`, {}),
+  customerResetLink: (id: string) => request<{ link: string }>("POST", `/api/customers/${id}/reset-link`, {}),
+
+  settings: () => request<{ settings: StoreSettings; payments: { provider: string; configured: boolean }; whatsapp: { configured: boolean } }>("GET", "/api/settings"),
+  saveSettings: (s: StoreSettings) => request<{ settings: StoreSettings }>("PUT", "/api/settings", s),
 };

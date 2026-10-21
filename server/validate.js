@@ -1,6 +1,7 @@
 import { HttpError } from "./auth.js";
 
-export const CATEGORIES = ["relogio", "perfume", "acessorio", "outros"];
+export const CATEGORIES = ["relogio", "perfume", "acessorio", "calcado", "outros"];
+export const PANEL_ROLES = ["owner", "staff", "stock"];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const bad = (msg) => new HttpError(400, msg);
@@ -42,17 +43,6 @@ export function parseProduct(body, { ownsPhoto }) {
     if (promoPriceCents > priceCents) throw bad("O preço promocional não pode ser maior que o preço.");
   }
 
-  const variations = [];
-  if (body.variations !== undefined) {
-    if (!Array.isArray(body.variations) || body.variations.length > 30) throw bad("Variações inválidas.");
-    const seen = new Set();
-    for (const v of body.variations) {
-      const label = str(v?.label, "Nome da variação", { min: 1, max: 40 });
-      if (seen.has(label.toLowerCase())) throw bad(`Variação repetida: ${label}.`);
-      seen.add(label.toLowerCase());
-      variations.push({ label, stock: int(v.stock, `Estoque de ${label}`, { max: 100000 }) });
-    }
-  }
   const colors = [];
   if (body.colors !== undefined) {
     if (!Array.isArray(body.colors) || body.colors.length > 20) throw bad("Cores inválidas.");
@@ -63,6 +53,26 @@ export function parseProduct(body, { ownsPhoto }) {
       if (seen.has(name.toLowerCase())) throw bad(`Cor repetida: ${name}.`);
       seen.add(name.toLowerCase());
       colors.push({ name, hex: c.hex.toLowerCase() });
+    }
+  }
+  const variations = [];
+  if (body.variations !== undefined) {
+    if (!Array.isArray(body.variations) || body.variations.length > 200) throw bad("Variações inválidas.");
+    const seen = new Set();
+    for (const v of body.variations) {
+      const label = str(v?.label, "Nome da variação", { min: 1, max: 40 });
+      const color = v?.color === undefined || v?.color === null ? "" : str(v.color, "Cor da variação", { max: 30 });
+      if (color && !colors.some((c) => c.name === color)) throw bad(`Cor da variação não cadastrada: ${color}.`);
+      const key = `${label.toLowerCase()}|${color.toLowerCase()}`;
+      if (seen.has(key)) throw bad(`Variação repetida: ${label}${color ? ` (${color})` : ""}.`);
+      seen.add(key);
+      variations.push({ label, color, stock: int(v.stock, `Estoque de ${label}`, { max: 100000 }) });
+    }
+    // Calçados: tamanhos em ordem crescente (e cores na ordem cadastrada).
+    if (body.category === "calcado") {
+      const num = (l) => (/^\d+([.,]\d+)?$/.test(l) ? Number(l.replace(",", ".")) : Infinity);
+      const ci = (c) => colors.findIndex((x) => x.name === c);
+      variations.sort((a, b) => ci(a.color) - ci(b.color) || num(a.label) - num(b.label) || a.label.localeCompare(b.label, "pt-BR"));
     }
   }
   const stock = variations.length
@@ -98,7 +108,7 @@ export function parseUser(body, { partial = false } = {}) {
     if (!EMAIL_RE.test(out.email)) throw bad("E-mail inválido.");
   }
   if (!partial || body.role !== undefined) {
-    if (!["owner", "staff"].includes(body.role)) throw bad("Função inválida.");
+    if (!PANEL_ROLES.includes(body.role)) throw bad("Perfil inválido.");
     out.role = body.role;
   }
   if (!partial && body.password === undefined) {

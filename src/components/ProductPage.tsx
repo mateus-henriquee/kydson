@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CATEGORY_SLUGS, categoryLabel, discountPct, isAvailable, type Product } from "../data/products";
 import { recommend } from "../lib/catalogFilter";
+import { findVariation, sizesFor } from "../lib/variants";
 import { formatBRL } from "../lib/money";
 import { Link } from "../lib/router";
 import { useCart } from "../state/CartContext";
@@ -51,14 +52,23 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
   const available = isAvailable(product);
   const promo = available ? discountPct(product) : 0;
   const [shot, setShot] = useState(0);
-  const [color, setColor] = useState(product.colors[0]?.name ?? "");
-  const firstInStock = product.variations.find((v) => v.stock > 0)?.label ?? "";
-  const [variation, setVariation] = useState(firstInStock);
+  // Começa na primeira cor que tem algum tamanho em estoque.
+  const [color, setColor] = useState(
+    () => product.colors.find((c) => sizesFor(product, c.name).some((v) => v.stock > 0))?.name ?? product.colors[0]?.name ?? "",
+  );
+  const [variation, setVariation] = useState(() => sizesFor(product, color).find((v) => v.stock > 0)?.label ?? "");
   const [added, setAdded] = useState(false);
   const recs = useMemo(() => recommend(all, product, 4), [all, product]);
 
   const hasVars = product.variations.length > 0;
-  const stock = hasVars ? (product.variations.find((v) => v.label === variation)?.stock ?? 0) : product.stock;
+  const sizes = useMemo(() => sizesFor(product, color), [product, color]);
+  const stock = hasVars ? (findVariation(product, variation, color)?.stock ?? 0) : product.stock;
+  const pickColor = (name: string) => {
+    setColor(name);
+    // Troca de cor: mantém o tamanho se existir com estoque; senão, o primeiro disponível.
+    const list = sizesFor(product, name);
+    setVariation((cur) => (list.some((v) => v.label === cur && v.stock > 0) ? cur : (list.find((v) => v.stock > 0)?.label ?? "")));
+  };
   const img = product.images[Math.min(shot, Math.max(0, product.images.length - 1))];
   const canAdd = available && stock > 0 && (!hasVars || !!variation);
 
@@ -126,7 +136,7 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
               <p className="pdp__label">
                 Cor: <strong>{color}</strong>
               </p>
-              <ColorSwatches colors={product.colors} selected={[color]} onToggle={(n) => setColor(n)} label="Escolher cor" />
+              <ColorSwatches colors={product.colors} selected={[color]} onToggle={pickColor} label="Escolher cor" />
             </div>
           )}
 
@@ -136,7 +146,7 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
                 Tamanho: <strong>{variation || "—"}</strong>
               </p>
               <div className="chips" role="group" aria-label="Escolher tamanho">
-                {product.variations.map((v) => (
+                {sizes.map((v) => (
                   <button key={v.label} type="button" className="chip" aria-pressed={v.label === variation} disabled={v.stock === 0} onClick={() => setVariation(v.label)}>
                     {v.label}
                   </button>
@@ -168,7 +178,7 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
               Ver carrinho
             </button>
           </div>
-          <p className="pdp__note">Frete, disponibilidade e pagamento são combinados pelo atendimento no WhatsApp.</p>
+          <p className="pdp__note">Pagamento seguro pelo Mercado Pago. Para comprar é preciso ter uma conta. Dúvidas? Fale com a loja pelo WhatsApp.</p>
         </div>
       </div>
 

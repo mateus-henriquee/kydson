@@ -96,6 +96,12 @@ export function OrderPage({ id }: { id: number }) {
               </li>
             ))}
           </ul>
+          {!!order.shippingCents && (
+            <div className="sum">
+              <span>Frete</span>
+              <strong>{formatBRL(order.shippingCents)}</strong>
+            </div>
+          )}
           <div className="sum">
             <span>Total</span>
             <strong>{formatBRL(order.totalCents)}</strong>

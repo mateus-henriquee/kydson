@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "./api";
-import type { Role, SessionUser, TeamUser } from "./types";
+import { ROLE_HELP, ROLE_LABEL, type Role, type SessionUser, type TeamUser } from "./types";
 
 export function Team({ me }: { me: SessionUser }) {
   const [users, setUsers] = useState<TeamUser[] | null>(null);
@@ -77,10 +77,13 @@ export function Team({ me }: { me: SessionUser }) {
           <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" placeholder="Vazio se já tem conta no site" />
         </label>
         <label>
-          Função
+          Perfil
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
-            <option value="staff">Colaborador</option>
-            <option value="owner">Proprietário</option>
+            {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
+              <option key={r} value={r}>
+                {ROLE_LABEL[r]} — {ROLE_HELP[r]}
+              </option>
+            ))}
           </select>
         </label>
         <div className="full">
@@ -98,7 +101,7 @@ export function Team({ me }: { me: SessionUser }) {
                 <tr>
                   <th scope="col">Nome</th>
                   <th scope="col">E-mail</th>
-                  <th scope="col">Função</th>
+                  <th scope="col">Perfil</th>
                   <th scope="col">Status</th>
                   <th scope="col">
                     <span className="sr-only">Ações</span>
@@ -122,8 +125,11 @@ export function Team({ me }: { me: SessionUser }) {
                           disabled={busy}
                           onChange={(e) => run(() => api.updateUser(u.id, { role: e.target.value as Role }), `Função de ${u.name} atualizada.`)}
                         >
-                          <option value="staff">Colaborador</option>
-                          <option value="owner">Proprietário</option>
+                          {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
+              <option key={r} value={r}>
+                {ROLE_LABEL[r]}
+              </option>
+            ))}
                         </select>
                       )}
                     </td>

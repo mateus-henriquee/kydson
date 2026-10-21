@@ -1,6 +1,5 @@
 import { HttpError } from "./auth.js";
 
-export const PENDING_MINUTES = 30; // prazo para pagar; passado isso o estoque volta
 export const MAX_PENDING_PER_USER = 3;
 
 const iso = (d) => (d ? new Date(d).toISOString() : null);
@@ -15,14 +14,18 @@ async function saveStock(t, p, variations, stock) {
   await t.query("update products set stock = $1, variations = $2, updated_at = now() where id = $3", [stock, JSON.stringify(variations), p.id]);
 }
 
+/** Acha a variação (tamanho + cor). Produtos antigos têm variação sem cor: serve de reserva. */
+const findVar = (variations, label, color) =>
+  variations.find((x) => x.label === label && (x.color ?? "") === (color ?? "")) ?? variations.find((x) => x.label === label && !x.color);
+
 /** Tira do estoque. Lança 400 se não houver. */
-export async function takeStock(t, p, variation, qty) {
+export async function takeStock(t, p, variation, qty, color = "") {
   const variations = structuredClone(p.variations ?? []);
   let stock;
   if (variations.length) {
-    const v = variations.find((x) => x.label === variation);
-    if (!v) throw new HttpError(400, `Escolha o tamanho/variação de ${p.name}.`);
-    if (v.stock < qty) throw new HttpError(400, `Estoque insuficiente: ${p.name} (${v.label}) tem ${v.stock}.`);
+    const v = findVar(variations, variation, color);
+    if (!v) throw new HttpError(400, `Escolha o tamanho/variação${(p.colors ?? []).length ? " e a cor" : ""} de ${p.name}.`);
+    if (v.stock < qty) throw new HttpError(400, `Estoque insuficiente: ${p.name} (${v.label}${v.color ? `, ${v.color}` : ""}) tem ${v.stock}.`);
     v.stock -= qty;
     stock = variations.reduce((s, x) => s + x.stock, 0);
   } else {
@@ -32,11 +35,11 @@ export async function takeStock(t, p, variation, qty) {
   await saveStock(t, p, variations, stock);
 }
 
-async function giveStock(t, productId, variation, qty) {
+async function giveStock(t, productId, variation, qty, color = "") {
   const p = await lockProduct(t, productId);
   if (!p) return;
   const variations = structuredClone(p.variations ?? []);
-  const v = variations.find((x) => x.label === variation);
+  const v = findVar(variations, variation, color);
   if (v) v.stock += qty;
   const stock = variations.length ? variations.reduce((s, x) => s + x.stock, 0) : p.stock + qty;
   await saveStock(t, p, variations, stock);
@@ -58,7 +61,7 @@ export async function reserveItems(t, items) {
       if (!c) throw new HttpError(400, `Escolha a cor de ${p.name}.`);
       color = c.name;
     }
-    await takeStock(t, p, it.variation, it.qty);
+    await takeStock(t, p, it.variation, it.qty, color);
     const unit = p.promo_price_cents !== null && p.promo_price_cents < p.price_cents ? p.promo_price_cents : p.price_cents;
     lines.push({ productId: p.id, name: p.name, variation: (p.variations ?? []).length ? it.variation : "", color, qty: it.qty, unit });
   }
@@ -66,10 +69,11 @@ export async function reserveItems(t, items) {
 }
 
 export async function insertOrder(t, o, lines) {
-  const total = lines.reduce((s, l) => s + l.unit * l.qty, 0);
+  const shippingCents = o.shippingCents ?? 0;
+  const total = lines.reduce((s, l) => s + l.unit * l.qty, 0) + shippingCents;
   const { rows } = await t.query(
-    `insert into orders (source, customer_id, customer_name, customer_email, customer_phone, shipping, note, status, total_cents, created_by, paid_at, expires_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+    `insert into orders (source, customer_id, customer_name, customer_email, customer_phone, shipping, note, status, total_cents, created_by, paid_at, expires_at, shipping_cents)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
     [
       o.source,
       o.customerId ?? null,
@@ -83,6 +87,7 @@ export async function insertOrder(t, o, lines) {
       o.createdBy ?? null,
       o.status === "paid" ? new Date() : null,
       o.expiresAt ?? null,
+      shippingCents,
     ],
   );
   for (const l of lines)
@@ -100,7 +105,7 @@ export async function cancelPending(t, id, { ownerId } = {}) {
   if (!o || o.status !== "pending") return false;
   if (ownerId && o.customer_id !== ownerId) return false;
   const items = (await t.query("select * from order_items where order_id = $1", [id])).rows;
-  for (const it of items) if (it.product_id) await giveStock(t, it.product_id, it.variation, it.qty);
+  for (const it of items) if (it.product_id) await giveStock(t, it.product_id, it.variation, it.qty, it.color);
   await t.query("update orders set status = 'canceled' where id = $1", [id]);
   return true;
 }
@@ -112,7 +117,7 @@ export async function cancelAny(t, id) {
   if (!o) throw new HttpError(404, "Pedido não encontrado.");
   if (o.status === "canceled") throw new HttpError(409, "Pedido já cancelado.");
   const items = (await t.query("select * from order_items where order_id = $1", [id])).rows;
-  for (const it of items) if (it.product_id) await giveStock(t, it.product_id, it.variation, it.qty);
+  for (const it of items) if (it.product_id) await giveStock(t, it.product_id, it.variation, it.qty, it.color);
   await t.query("update orders set status = 'canceled' where id = $1", [id]);
 }
 
@@ -160,6 +165,7 @@ export async function staffOrders(db, rows) {
     note: o.note,
     status: o.status,
     totalCents: o.total_cents,
+    shippingCents: o.shipping_cents,
     createdAt: iso(o.created_at),
     paidAt: iso(o.paid_at),
     expiresAt: iso(o.expires_at),
@@ -180,6 +186,7 @@ export async function customerOrders(db, rows) {
     id: o.id,
     status: o.status,
     totalCents: o.total_cents,
+    shippingCents: o.shipping_cents,
     createdAt: iso(o.created_at),
     paidAt: iso(o.paid_at),
     expiresAt: iso(o.expires_at),

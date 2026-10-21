@@ -12,6 +12,7 @@ export interface MyOrder {
   id: number;
   status: "pending" | "paid" | "canceled";
   totalCents: number;
+  shippingCents?: number;
   createdAt: string;
   paidAt: string | null;
   expiresAt: string | null;

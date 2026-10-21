@@ -1,4 +1,5 @@
 import type { Product } from "../data/products";
+import { findVariation } from "./variants";
 
 /** Uma linha do carrinho: produto + tamanho/variação + cor (vazios se o produto não tem). */
 export interface CartLine {
@@ -64,7 +65,7 @@ export function priceLines(lines: CartLine[], catalog: Product[], maxPerItem = 1
     if (!product) continue;
     let stock = product.stock;
     if (product.variations.length > 0) {
-      const v = product.variations.find((x) => x.label === l.variation);
+      const v = findVariation(product, l.variation, l.color);
       if (!v) continue;
       stock = v.stock;
     } else if (l.variation !== "") {

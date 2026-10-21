@@ -4,12 +4,15 @@ import { emptyAddress, maskPhone, toAddressForm, validateDelivery, type AddressF
 import { formatBRL } from "../lib/money";
 import { Link, navigate } from "../lib/router";
 import { useAuth } from "../state/AuthContext";
+import { useCatalog } from "../state/CatalogContext";
 import { useCart } from "../state/CartContext";
 import { AddressFields } from "../components/AddressFields";
 
 export function CheckoutPage() {
   const auth = useAuth();
   const cart = useCart();
+  const { shippingCents } = useCatalog();
+  const grand = cart.totalCents + shippingCents;
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [addr, setAddr] = useState<AddressForm>(emptyAddress);
@@ -106,7 +109,7 @@ export function CheckoutPage() {
             </p>
           )}
           <button className="btn btn--block" disabled={busy}>
-            {busy ? "Abrindo pagamento…" : `Pagar ${formatBRL(cart.totalCents)} com Mercado Pago`}
+            {busy ? "Abrindo pagamento…" : `Pagar ${formatBRL(grand)} com Mercado Pago`}
           </button>
           <p className="form__hint">Você será levado ao Mercado Pago. O estoque fica reservado por 30 minutos.</p>
         </form>
@@ -124,9 +127,15 @@ export function CheckoutPage() {
               </li>
             ))}
           </ul>
+          {shippingCents > 0 && (
+            <div className="sum">
+              <span>Frete</span>
+              <strong>{formatBRL(shippingCents)}</strong>
+            </div>
+          )}
           <div className="sum">
             <span>Total</span>
-            <strong>{formatBRL(cart.totalCents)}</strong>
+            <strong>{formatBRL(grand)}</strong>
           </div>
           <p className="form__hint">O valor final é conferido pelo servidor com o preço atual.</p>
         </aside>

@@ -34,9 +34,11 @@ Só entra quem tem função Colaborador ou Proprietário. Clientes não acessam.
 | Tela | O que faz |
 |---|---|
 | Dashboard | faturamento, pedidos, ticket médio, comparativos, mais vendidos |
-| Produtos e Estoque | cadastro, preço/promoção, destaque, lançamento, fotos (até 4 MB), cores, estoque por variação |
+| Produtos e Estoque | cadastro, preço/promoção, destaque, lançamento, fotos (até 4 MB), cores. **Calçados**: tamanhos 33–44 (+ outros) e estoque por cor × tamanho; no site os tamanhos aparecem em ordem crescente |
 | Pedidos | pedidos do site (entram sozinhos, com cliente, endereço e status do WhatsApp, reenvio e conferência) e pedidos manuais |
-| Equipe (proprietário) | promover cliente a colaborador, criar acessos, trocar função, redefinir senha, desativar |
+| Clientes (proprietário e atendimento) | lista com busca, status do e-mail, confirmar e-mail, gerar link de nova senha |
+| Equipe (proprietário) | perfis: **Proprietário** (tudo), **Atendimento** (dashboard, produtos, pedidos, clientes), **Estoque** (só produtos) |
+| Configurações (proprietário) | status do Mercado Pago/WhatsApp, frete fixo, tempo de reserva do estoque |
 
 ## Segurança
 - Login pelo Supabase Auth; a API valida o token a cada chamada.

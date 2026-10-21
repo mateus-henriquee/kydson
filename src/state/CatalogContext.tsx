@@ -5,6 +5,8 @@ type Status = "loading" | "ready" | "error";
 
 interface CatalogCtx {
   products: Product[];
+  /** Frete fixo cobrado em cada pedido (centavos). */
+  shippingCents: number;
   status: Status;
   reload: () => void;
   /** Categorias que têm ao menos um produto. */
@@ -19,6 +21,7 @@ export const BUMP_KEY = "kydson-catalog-bump";
 export function CatalogProvider({ children }: { children: ReactNode }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [status, setStatus] = useState<Status>("loading");
+  const [shippingCents, setShippingCents] = useState(0);
 
   /** `silent`: atualização em segundo plano; não troca a tela por "carregando" nem por erro. */
   const load = useCallback(async (silent = false) => {
@@ -26,9 +29,10 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch("/api/catalog", { cache: "no-store" });
       if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as { products?: Product[] };
+      const data = (await res.json()) as { products?: Product[]; shippingCents?: number };
       if (!Array.isArray(data.products)) throw new Error("formato inválido");
       const next = data.products;
+      setShippingCents(Number.isInteger(data.shippingCents) ? (data.shippingCents as number) : 0);
       // Evita re-renderizar a página inteira quando nada mudou.
       setProducts((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       setStatus("ready");
@@ -58,11 +62,12 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
   const value = useMemo<CatalogCtx>(
     () => ({
       products,
+      shippingCents,
       status,
       reload: () => void load(),
       categories: CATEGORIES.filter((c) => products.some((p) => p.category === c.id)),
     }),
-    [products, status, load],
+    [products, shippingCents, status, load],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
