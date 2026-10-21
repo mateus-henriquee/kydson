@@ -15,7 +15,7 @@ const NAV: { id: Route; label: string; roles: Role[] }[] = [
   { id: "produtos", label: "Produtos e Estoque", roles: ["owner", "staff", "stock"] },
   { id: "pedidos", label: "Pedidos", roles: ["owner", "staff"] },
   { id: "clientes", label: "Clientes", roles: ["owner", "staff"] },
-  { id: "equipe", label: "Equipe", roles: ["owner"] },
+  { id: "equipe", label: "Colaboradores", roles: ["owner"] },
   { id: "configuracoes", label: "Configurações", roles: ["owner"] },
 ];
 

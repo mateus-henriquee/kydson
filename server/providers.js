@@ -46,8 +46,16 @@ export async function createSupabaseProvider({ url, serviceKey }) {
       if (error) throw new HttpError(400, error.message);
       return data.properties.action_link;
     },
-    async updateUser(id, { password, banned } = {}) {
+    async deleteUser(id) {
+      const { error } = await sb.auth.admin.deleteUser(id);
+      if (error && !/not found/i.test(error.message)) throw new HttpError(400, error.message);
+    },
+    async updateUser(id, { password, banned, email } = {}) {
       const attrs = {};
+      if (email) {
+        attrs.email = email;
+        attrs.email_confirm = true;
+      }
       if (password) attrs.password = password;
       if (banned !== undefined) attrs.ban_duration = banned ? "876000h" : "none";
       const { error } = await sb.auth.admin.updateUserById(id, attrs);

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "./api";
+import { Confirm } from "./Confirm";
 import { ROLE_HELP, ROLE_LABEL, type Role, type SessionUser, type TeamUser } from "./types";
+
+const ROLES = Object.keys(ROLE_LABEL) as Role[];
 
 export function Team({ me }: { me: SessionUser }) {
   const [users, setUsers] = useState<TeamUser[] | null>(null);
@@ -8,8 +11,8 @@ export function Team({ me }: { me: SessionUser }) {
   const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "staff" as Role });
   const [busy, setBusy] = useState(false);
-  const [resetFor, setResetFor] = useState<string | null>(null);
-  const [newPass, setNewPass] = useState("");
+  const [edit, setEdit] = useState<{ id: string; name: string; email: string; role: Role; password: string } | null>(null);
+  const [toDelete, setToDelete] = useState<TeamUser | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -41,14 +44,30 @@ export function Team({ me }: { me: SessionUser }) {
 
   const add = async (e: FormEvent) => {
     e.preventDefault();
-    if (await run(() => api.createUser({ ...form, password: form.password || undefined }), `${form.name} foi adicionado(a).`)) setForm({ name: "", email: "", password: "", role: "staff" });
+    if (await run(() => api.createUser({ ...form, password: form.password || undefined }), `${form.name} foi adicionado(a).`))
+      setForm({ name: "", email: "", password: "", role: "staff" });
+  };
+
+  const saveEdit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!edit) return;
+    const patch: Parameters<typeof api.updateUser>[1] = { name: edit.name.trim(), email: edit.email.trim(), role: edit.role };
+    if (edit.password) patch.password = edit.password;
+    if (await run(() => api.updateUser(edit.id, patch), `${edit.name.trim()} foi atualizado(a).`)) setEdit(null);
+  };
+
+  const remove = async () => {
+    if (!toDelete) return;
+    const u = toDelete;
+    setToDelete(null);
+    await run(() => api.deleteUser(u.id), `${u.name} foi excluído(a). O acesso foi removido.`);
   };
 
   return (
     <>
       <header className="adm-head">
-        <h1>Equipe</h1>
-        <p className="adm-muted">Só quem está aqui consegue entrar no painel. Desativar uma pessoa encerra o acesso na hora.</p>
+        <h1>Colaboradores</h1>
+        <p className="adm-muted">Só quem está aqui consegue entrar no painel. Crie, edite ou exclua colaboradores. Desativar encerra o acesso na hora, mas mantém o cadastro.</p>
       </header>
 
       {notice && (
@@ -79,7 +98,7 @@ export function Team({ me }: { me: SessionUser }) {
         <label>
           Perfil
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
-            {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
+            {ROLES.map((r) => (
               <option key={r} value={r}>
                 {ROLE_LABEL[r]} — {ROLE_HELP[r]}
               </option>
@@ -92,6 +111,42 @@ export function Team({ me }: { me: SessionUser }) {
           </button>
         </div>
       </form>
+
+      {edit && (
+        <form onSubmit={saveEdit} className="adm-card adm-fields" noValidate aria-label="Editar colaborador">
+          <h2 className="full">Editar colaborador</h2>
+          <label>
+            Nome
+            <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
+          </label>
+          <label>
+            E-mail
+            <input type="email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} autoComplete="off" required />
+          </label>
+          <label>
+            Perfil
+            <select value={edit.role} disabled={edit.id === me.id} onChange={(e) => setEdit({ ...edit, role: e.target.value as Role })}>
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABEL[r]} — {ROLE_HELP[r]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Nova senha (opcional)
+            <input type="password" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} autoComplete="new-password" placeholder="Deixe vazio para manter" />
+          </label>
+          <div className="full adm-actions">
+            <button className="adm-btn adm-btn--primary" disabled={busy}>
+              Salvar alterações
+            </button>
+            <button type="button" className="adm-btn" onClick={() => setEdit(null)}>
+              Cancelar
+            </button>
+          </div>
+        </form>
+      )}
 
       {users && (
         <section className="adm-card adm-card--flush">
@@ -115,66 +170,28 @@ export function Team({ me }: { me: SessionUser }) {
                       {u.name} {u.id === me.id && <small className="adm-muted">(você)</small>}
                     </th>
                     <td>{u.email}</td>
-                    <td>
-                      {u.id === me.id ? (
-                        "Proprietário"
-                      ) : (
-                        <select
-                          aria-label={`Função de ${u.name}`}
-                          value={u.role}
-                          disabled={busy}
-                          onChange={(e) => run(() => api.updateUser(u.id, { role: e.target.value as Role }), `Função de ${u.name} atualizada.`)}
-                        >
-                          {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
-              <option key={r} value={r}>
-                {ROLE_LABEL[r]}
-              </option>
-            ))}
-                        </select>
-                      )}
-                    </td>
+                    <td>{ROLE_LABEL[u.role]}</td>
                     <td>{u.active ? "Ativo" : "Desativado"}</td>
                     <td className="adm-actions-cell">
-                      {resetFor === u.id ? (
-                        <span className="adm-inline">
-                          <input
-                            type="password"
-                            aria-label={`Nova senha de ${u.name}`}
-                            placeholder="Nova senha"
-                            value={newPass}
-                            onChange={(e) => setNewPass(e.target.value)}
-                            autoComplete="new-password"
-                          />
-                          <button
-                            className="adm-btn adm-btn--sm adm-btn--primary"
-                            disabled={busy}
-                            onClick={async () => {
-                              if (await run(() => api.updateUser(u.id, { password: newPass }), `Senha de ${u.name} redefinida.`)) {
-                                setResetFor(null);
-                                setNewPass("");
-                              }
-                            }}
-                          >
-                            Salvar
-                          </button>
-                          <button className="adm-btn adm-btn--sm" onClick={() => (setResetFor(null), setNewPass(""))}>
-                            Cancelar
-                          </button>
-                        </span>
-                      ) : (
+                      <button
+                        className="adm-btn adm-btn--sm"
+                        onClick={() => (setNotice(""), setEdit({ id: u.id, name: u.name, email: u.email, role: u.role, password: "" }), window.scrollTo({ top: 0, behavior: "smooth" }))}
+                        aria-label={`Editar ${u.name}`}
+                      >
+                        Editar
+                      </button>
+                      {u.id !== me.id && (
                         <>
-                          <button className="adm-btn adm-btn--sm" onClick={() => (setResetFor(u.id), setNewPass(""))}>
-                            Nova senha
+                          <button
+                            className="adm-btn adm-btn--sm"
+                            disabled={busy}
+                            onClick={() => run(() => api.updateUser(u.id, { active: !u.active }), `${u.name} foi ${u.active ? "desativado(a)" : "reativado(a)"}.`)}
+                          >
+                            {u.active ? "Desativar" : "Reativar"}
                           </button>
-                          {u.id !== me.id && (
-                            <button
-                              className={`adm-btn adm-btn--sm ${u.active ? "adm-btn--danger" : ""}`}
-                              disabled={busy}
-                              onClick={() => run(() => api.updateUser(u.id, { active: !u.active }), `${u.name} foi ${u.active ? "desativado(a)" : "reativado(a)"}.`)}
-                            >
-                              {u.active ? "Desativar" : "Reativar"}
-                            </button>
-                          )}
+                          <button className="adm-btn adm-btn--sm adm-btn--danger" disabled={busy} onClick={() => setToDelete(u)} aria-label={`Excluir ${u.name}`}>
+                            Excluir
+                          </button>
                         </>
                       )}
                     </td>
@@ -184,6 +201,17 @@ export function Team({ me }: { me: SessionUser }) {
             </table>
           </div>
         </section>
+      )}
+
+      {toDelete && (
+        <Confirm
+          title={`Excluir ${toDelete.name}?`}
+          message="A conta é apagada e o acesso ao painel e ao site é removido. Pedidos já registrados continuam no histórico. Não dá para desfazer."
+          confirmLabel="Excluir"
+          busy={busy}
+          onConfirm={remove}
+          onCancel={() => setToDelete(null)}
+        />
       )}
     </>
   );

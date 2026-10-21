@@ -462,10 +462,31 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       const nextRole = u.role ?? cur.role;
       const nextActive = u.active ?? cur.active;
       if (id === req.user.id && (!nextActive || nextRole !== "owner")) throw new HttpError(400, "Você não pode desativar nem rebaixar a si mesmo.");
-      const { rows } = await db.query("update profiles set name = $2, role = $3, active = $4 where id = $1 returning *", [id, u.name ?? cur.name, nextRole, nextActive]);
+      let nextEmail = cur.email;
+      if (u.email && u.email !== cur.email.toLowerCase()) {
+        const dup = (await db.query("select 1 from profiles where lower(email) = $1 and id <> $2", [u.email, id])).rows[0];
+        if (dup) throw new HttpError(409, "Já existe uma conta com este e-mail.");
+        await provider.updateUser(id, { email: u.email });
+        nextEmail = u.email;
+      }
+      const { rows } = await db.query("update profiles set name = $2, role = $3, active = $4, email = $5 where id = $1 returning *", [id, u.name ?? cur.name, nextRole, nextActive, nextEmail]);
       if (u.password) await provider.updateUser(id, { password: u.password });
       if (u.active !== undefined) await provider.updateUser(id, { banned: !u.active }).catch(() => {});
       res.json({ user: teamOut(rows[0]) });
+    }),
+  );
+
+  router.delete(
+    "/users/:id",
+    auth.owner,
+    wrap(async (req, res) => {
+      const id = parseUuid(req.params.id);
+      if (id === req.user.id) throw new HttpError(400, "Você não pode excluir a si mesmo.");
+      const cur = (await db.query("select * from profiles where id = $1 and role in ('stock','staff','owner')", [id])).rows[0];
+      if (!cur) throw new HttpError(404, "Colaborador não encontrado.");
+      await provider.deleteUser(id);
+      await db.query("delete from profiles where id = $1", [id]); // pedidos antigos ficam, sem o nome de quem registrou
+      res.json({ ok: true });
     }),
   );
 

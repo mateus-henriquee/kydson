@@ -31,6 +31,9 @@ const provider = {
   async updateUser(id, attrs) {
     adminCalls.push([id, attrs]);
   },
+  async deleteUser(id) {
+    for (const [t, a] of accounts) if (a.id === id) accounts.delete(t);
+  },
   confirmed: new Set(),
   async confirmedMap() {
     return new Map([...accounts.values()].map((a) => [a.id, provider.confirmed.has(a.id)]));
@@ -801,5 +804,30 @@ describe("calçados, perfis, clientes e configurações", () => {
     assert.equal(prefs.at(-1).shippingCents, 1500);
     assert.equal((await owner.get("/api/settings")).json.payments.configured, true);
     await owner.put("/api/settings", { shippingCents: 0, reserveMinutes: 30 });
+  });
+});
+
+describe("colaboradores: editar e excluir", () => {
+  it("edita nome, e-mail e perfil; exclui; protege contra auto-exclusão", async () => {
+    const o = await as("dono-col@x.com", "owner");
+    const c = await o.post("/api/users", { name: "Colab Um", email: "colab1@x.com", password: "senha-forte-1", role: "staff" });
+    assert.equal(c.status, 201);
+    const id = c.json.user.id;
+    adminCalls.length = 0;
+    const e = await o.patch(`/api/users/${id}`, { name: "Colab Editado", email: "NOVO-colab@x.com", role: "stock" });
+    assert.equal(e.status, 200);
+    assert.equal(e.json.user.name, "Colab Editado");
+    assert.equal(e.json.user.email, "novo-colab@x.com");
+    assert.equal(e.json.user.role, "stock");
+    assert.ok(adminCalls.some(([i, a]) => i === id && a.email === "novo-colab@x.com"));
+    assert.equal((await o.patch(`/api/users/${id}`, { email: "dono-col@x.com" })).status, 409);
+    assert.equal((await o.del(`/api/users/${o.id}`)).status, 400);
+    const st = await as("so-staff@x.com", "staff");
+    assert.equal((await st.del(`/api/users/${id}`)).status, 403);
+    assert.equal((await o.del(`/api/users/${id}`)).status, 200);
+    assert.equal((await o.del(`/api/users/${id}`)).status, 404);
+    assert.equal((await db.query("select 1 from profiles where id = $1", [id])).rows.length, 0);
+    const cust = await as("cliente-col@x.com");
+    assert.equal((await o.del(`/api/users/${cust.id}`)).status, 404); // cliente não é colaborador
   });
 });

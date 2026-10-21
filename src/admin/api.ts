@@ -37,8 +37,9 @@ export const api = {
   users: () => request<{ users: TeamUser[] }>("GET", "/api/users"),
   createUser: (u: { name: string; email: string; password?: string; role: Role }) =>
     request<{ user: TeamUser }>("POST", "/api/users", u),
-  updateUser: (id: string, patch: Partial<{ name: string; role: Role; active: boolean; password: string }>) =>
+  updateUser: (id: string, patch: Partial<{ name: string; email: string; role: Role; active: boolean; password: string }>) =>
     request<{ user: TeamUser }>("PATCH", `/api/users/${id}`, patch),
+  deleteUser: (id: string) => request<{ ok: true }>("DELETE", `/api/users/${id}`),
 
   customers: (q: string) => request<{ customers: Customer[] }>("GET", `/api/customers?q=${encodeURIComponent(q)}`),
   confirmCustomerEmail: (id: string) => request<{ ok: true }>("POST", `/api/customers/${id}/confirm-email`, {}),
