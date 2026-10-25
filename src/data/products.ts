@@ -30,6 +30,8 @@ export interface ProductColor {
   name: string;
   /** Cor em #rrggbb. */
   hex: string;
+  /** Fotos desta cor (se vazio, usa as fotos gerais do produto). */
+  photos?: string[];
 }
 
 export interface Product {

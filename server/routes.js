@@ -279,14 +279,15 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
     wrap(async (req, res) => {
       const id = parseId(req.params.id);
       const p = parseProduct(req.body, { ownsPhoto: storage.owns });
-      const old = (await db.query("select photos from products where id = $1", [id])).rows[0];
+      const old = (await db.query("select photos, colors from products where id = $1", [id])).rows[0];
       if (!old) throw new HttpError(404, "Produto não encontrado.");
       const { rows } = await db.query(
         `update products set name=$1, description=$2, category=$3, price_cents=$4, promo_price_cents=$5, featured=$6, launch=$7, active=$8, stock=$9,
            variations=$10, colors=$11, photos=$12, updated_at=now() where id=$13 returning *`,
         [...productParams(p), id],
       );
-      await removeOrphanPhotos(old.photos.filter((f) => !p.photos.includes(f)));
+      const keep = new Set(allPhotos(p));
+      await removeOrphanPhotos(allPhotos(old).filter((f) => !keep.has(f)));
       res.json({ product: productOut(rows[0]) });
     }),
   );
@@ -296,18 +297,26 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
     auth.panel,
     wrap(async (req, res) => {
       const id = parseId(req.params.id);
-      const old = (await db.query("select photos from products where id = $1", [id])).rows[0];
+      const old = (await db.query("select photos, colors from products where id = $1", [id])).rows[0];
       if (!old) throw new HttpError(404, "Produto não encontrado.");
       await db.query("delete from products where id = $1", [id]); // itens de pedidos antigos mantêm o nome
-      await removeOrphanPhotos(old.photos);
+      await removeOrphanPhotos(allPhotos(old));
       res.json({ ok: true });
     }),
   );
 
+  /** Fotos gerais + fotos de cada cor. */
+  const allPhotos = (p) => [...new Set([...(p.photos ?? []), ...(p.colors ?? []).flatMap((c) => c.photos ?? [])])];
+
   async function removeOrphanPhotos(urls) {
     const gone = [];
     for (const url of urls) {
-      const used = (await db.query("select 1 from products where photos @> $1::jsonb limit 1", [JSON.stringify([url])])).rows[0];
+      const used = (
+        await db.query(
+          "select 1 from products where photos @> $1::jsonb or colors @> $2::jsonb limit 1",
+          [JSON.stringify([url]), JSON.stringify([{ photos: [url] }])],
+        )
+      ).rows[0];
       if (!used) gone.push(url);
     }
     if (gone.length) await storage.remove(gone).catch(() => {});

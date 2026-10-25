@@ -831,3 +831,23 @@ describe("colaboradores: editar e excluir", () => {
     assert.equal((await o.del(`/api/users/${cust.id}`)).status, 404); // cliente não é colaborador
   });
 });
+
+describe("fotos por cor (mesmo modelo, várias cores)", () => {
+  it("guarda fotos de cada cor, recusa foto de fora e só apaga a foto quando ninguém usa", async () => {
+    const o = await as("dono-fotos@x.com", "owner");
+    const up = async () => (await o.post("/api/uploads", PNG, { "content-type": "image/png" })).json.url;
+    const [a, b] = [await up(), await up()];
+    const r = await o.post("/api/products", product({ name: "Air 1", category: "calcado", colors: [{ name: "Branco", hex: "#ffffff", photos: [a] }, { name: "Preto", hex: "#000000", photos: [b] }], variations: [{ label: "40", color: "Branco", stock: 2 }, { label: "41", color: "Preto", stock: 3 }] }));
+    assert.equal(r.status, 201);
+    assert.deepEqual(r.json.product.colors.map((c) => c.photos), [[a], [b]]);
+    const cat = (await anon().get("/api/catalog")).json.products.find((p) => p.name === "Air 1");
+    assert.deepEqual(cat.colors[1].photos, [b]);
+    assert.equal((await o.post("/api/products", product({ colors: [{ name: "X", hex: "#000000", photos: ["https://evil.test/x.png"] }] }))).status, 400);
+    // remove a foto da cor Preto: o arquivo some; a do Branco continua
+    const id = r.json.product.id;
+    const up2 = await o.put(`/api/products/${id}`, product({ name: "Air 1", category: "calcado", colors: [{ name: "Branco", hex: "#ffffff", photos: [a] }, { name: "Preto", hex: "#000000" }], variations: [{ label: "40", color: "Branco", stock: 2 }] }));
+    assert.equal(up2.status, 200);
+    assert.equal(fs.existsSync(path.join(uploads, path.basename(b))), false);
+    assert.equal(fs.existsSync(path.join(uploads, path.basename(a))), true);
+  });
+});

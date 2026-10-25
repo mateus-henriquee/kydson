@@ -22,6 +22,8 @@ export interface Variation {
 export interface ProductColor {
   name: string;
   hex: string;
+  /** Fotos só desta cor. */
+  photos?: string[];
 }
 
 export interface AdminProduct {

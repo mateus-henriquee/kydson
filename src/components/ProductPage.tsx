@@ -65,11 +65,14 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
   const stock = hasVars ? (findVariation(product, variation, color)?.stock ?? 0) : product.stock;
   const pickColor = (name: string) => {
     setColor(name);
+    setShot(0);
     // Troca de cor: mantém o tamanho se existir com estoque; senão, o primeiro disponível.
     const list = sizesFor(product, name);
     setVariation((cur) => (list.some((v) => v.label === cur && v.stock > 0) ? cur : (list.find((v) => v.stock > 0)?.label ?? "")));
   };
-  const img = product.images[Math.min(shot, Math.max(0, product.images.length - 1))];
+  // Fotos da cor escolhida; se a cor não tem fotos próprias, usa as gerais.
+  const gallery = product.colors.find((c) => c.name === color)?.photos?.length ? (product.colors.find((c) => c.name === color)!.photos as string[]) : product.images;
+  const img = gallery[Math.min(shot, Math.max(0, gallery.length - 1))];
   const canAdd = available && stock > 0 && (!hasVars || !!variation);
 
   useEffect(() => {
@@ -100,9 +103,9 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
             )}
             {!available && <span className="card__soldout">Esgotado</span>}
           </div>
-          {product.images.length > 1 && (
+          {gallery.length > 1 && (
             <ul className="pdp__thumbs" aria-label="Fotos do produto">
-              {product.images.map((src, i) => (
+              {gallery.map((src, i) => (
                 <li key={src}>
                   <button type="button" aria-label={`Ver foto ${i + 1}`} aria-pressed={i === shot} onClick={() => setShot(i)}>
                     <img src={src} alt="" width={120} height={120} loading="lazy" />

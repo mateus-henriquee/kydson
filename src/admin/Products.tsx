@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { centsToInput, formatBRL, parseMoneyInput } from "../lib/money";
 import { api, ApiError } from "./api";
 import { Confirm } from "./Confirm";
+import { ColorPhotos } from "./ColorPhotos";
 import { ShoeStock, shoeVariations, sortSizes, stockKey } from "./ShoeStock";
 import { CATEGORIES, categoryLabel, type AdminProduct, type Category, type ProductInput, type ProductColor, type Variation } from "./types";
 
@@ -313,7 +314,7 @@ function ProductForm({
       active,
       stock: stockN,
       variations: vars,
-      colors: colors.map((c) => ({ name: c.name.trim(), hex: c.hex })),
+      colors: colors.map((c) => ({ name: c.name.trim(), hex: c.hex, ...(c.photos?.length ? { photos: c.photos } : {}) })),
       photos,
     };
     if (!body.name) return setError("Informe o nome do produto.");
@@ -411,6 +412,8 @@ function ProductForm({
         </label>
         {uploading && <p className="adm-muted">Enviando…</p>}
       </section>
+
+      <ColorPhotos colors={colors} setColors={setColors} />
 
       {isShoe && (
         <ShoeStock

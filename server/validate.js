@@ -52,7 +52,9 @@ export function parseProduct(body, { ownsPhoto }) {
       if (typeof c.hex !== "string" || !/^#[0-9a-fA-F]{6}$/.test(c.hex)) throw bad(`Cor inválida: ${name}.`);
       if (seen.has(name.toLowerCase())) throw bad(`Cor repetida: ${name}.`);
       seen.add(name.toLowerCase());
-      colors.push({ name, hex: c.hex.toLowerCase() });
+      const cp = c.photos ?? [];
+      if (!Array.isArray(cp) || cp.length > 8 || cp.some((u) => !ownsPhoto(u))) throw bad(`Fotos inválidas na cor ${name}.`);
+      colors.push(cp.length ? { name, hex: c.hex.toLowerCase(), photos: cp } : { name, hex: c.hex.toLowerCase() });
     }
   }
   const variations = [];
