@@ -5,7 +5,7 @@ Guarde cada chave em um bloco de notas; você vai colá-las na Vercel no passo 4
 
 ## 1. Supabase (banco, login e fotos)
 1. Crie conta em supabase.com → **New project** (região São Paulo). Anote a senha do banco.
-2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois cole `0002_calcados_perfis_config.sql` → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
+2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois `0002_calcados_perfis_config.sql` e `0003_modelo.sql`, um de cada vez → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
 3. **Project Settings → API**: copie `Project URL` (→ `SUPABASE_URL` e `VITE_SUPABASE_URL`), `anon public` (→ `VITE_SUPABASE_ANON_KEY`) e `service_role` (→ `SUPABASE_SERVICE_ROLE_KEY`, **secreta**).
 4. **Project Settings → Database → Connection string → Transaction pooler** (porta 6543): copie a URL, troque `[YOUR-PASSWORD]` pela senha (→ `DATABASE_URL`).
 5. **Authentication → Providers → Email**: deixe ligado. Recomendado: manter "Confirm email" ligado.

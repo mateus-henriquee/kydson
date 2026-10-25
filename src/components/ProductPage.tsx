@@ -58,6 +58,8 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
   );
   const [variation, setVariation] = useState(() => sizesFor(product, color).find((v) => v.stock > 0)?.label ?? "");
   const [added, setAdded] = useState(false);
+  // Mesmo modelo em outras cores (cada cor é um produto próprio).
+  const family = useMemo(() => (product.model ? all.filter((p) => p.model.toLowerCase() === product.model.toLowerCase()) : []), [all, product.model]);
   const recs = useMemo(() => recommend(all, product, 4), [all, product]);
 
   const hasVars = product.variations.length > 0;
@@ -131,6 +133,25 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
             <strong>{formatBRL(product.priceCents)}</strong>
             {promo > 0 && product.compareAtCents !== null && <em>Você economiza {formatBRL(product.compareAtCents - product.priceCents)}</em>}
           </p>
+
+          {family.length > 1 && (
+            <div className="pdp__opt">
+              <p className="pdp__label">
+                Modelo <strong>{product.model}</strong> em outras cores:
+              </p>
+              <ul className="family" aria-label="Cores deste modelo">
+                {family.map((p) => (
+                  <li key={p.id}>
+                    <Link to={`/produto/${p.id}`} className="family__item" aria-current={p.id === product.id ? "page" : undefined} aria-label={`${p.name}${isAvailable(p) ? "" : " (esgotado)"}`}>
+                      {p.images[0] ? <img src={p.images[0]} alt="" width={64} height={64} loading="lazy" /> : <span className="family__dot" style={{ background: p.colors[0]?.hex ?? "#777" }} />}
+                      <span>{p.colors[0]?.name ?? p.name}</span>
+                      {!isAvailable(p) && <small>Esgotado</small>}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {product.description && <p className="pdp__desc">{product.description}</p>}
 

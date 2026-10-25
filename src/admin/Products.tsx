@@ -11,7 +11,7 @@ const LOW_STOCK = 3;
 export function Products() {
   const [items, setItems] = useState<AdminProduct[] | null>(null);
   const [error, setError] = useState("");
-  const [editing, setEditing] = useState<AdminProduct | "new" | null>(null);
+  const [editing, setEditing] = useState<AdminProduct | "new" | { newColorOf: AdminProduct } | null>(null);
   const [toDelete, setToDelete] = useState<AdminProduct | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [q, setQ] = useState("");
@@ -57,7 +57,9 @@ export function Products() {
   if (editing) {
     return (
       <ProductForm
-        product={editing === "new" ? null : editing}
+        product={editing === "new" || "newColorOf" in editing ? null : editing}
+        seed={editing !== "new" && "newColorOf" in editing ? editing.newColorOf : null}
+        models={[...new Set((items ?? []).map((p) => p.model).filter(Boolean))]}
         onCancel={() => setEditing(null)}
         onSaved={(name, created) => {
           setEditing(null);
@@ -140,6 +142,7 @@ export function Products() {
                         {p.photos[0] ? <img src={p.photos[0]} alt="" width={44} height={44} /> : <span className="adm-prod__ph" aria-hidden="true" />}
                         <span>
                           {p.name}
+                          {p.model && <small>Modelo: {p.model}</small>}
                           {(p.featured || p.launch) && (
                             <small>{[p.featured && "Destaque", p.launch && "Lançamento"].filter(Boolean).join(" · ")}</small>
                           )}
@@ -166,6 +169,9 @@ export function Products() {
                     <td className="adm-actions-cell">
                       <button className="adm-btn adm-btn--sm" onClick={() => (setNotice(""), setEditing(p))} aria-label={`Editar ${p.name}`}>
                         Editar
+                      </button>
+                      <button className="adm-btn adm-btn--sm" onClick={() => (setNotice(""), setEditing({ newColorOf: p }))} aria-label={`Nova cor de ${p.name}`}>
+                        + Cor
                       </button>
                       <button className="adm-btn adm-btn--sm adm-btn--danger" onClick={() => setToDelete(p)} aria-label={`Excluir ${p.name}`}>
                         Excluir
@@ -196,29 +202,36 @@ export function Products() {
 /* ---------- formulário ---------- */
 function ProductForm({
   product,
+  seed,
+  models,
   onCancel,
   onSaved,
 }: {
   product: AdminProduct | null;
+  /** "Nova cor deste modelo": copia os dados deste produto (sem fotos, cor e estoque). */
+  seed: AdminProduct | null;
+  models: string[];
   onCancel: () => void;
   onSaved: (name: string, created: boolean) => void;
 }) {
+  const base = product ?? seed;
   const [name, setName] = useState(product?.name ?? "");
-  const [description, setDescription] = useState(product?.description ?? "");
-  const [category, setCategory] = useState<Category>(product?.category ?? "relogio");
-  const [price, setPrice] = useState(centsToInput(product?.priceCents));
-  const [promo, setPromo] = useState(centsToInput(product?.promoPriceCents));
+  const [description, setDescription] = useState(base?.description ?? "");
+  const [category, setCategory] = useState<Category>(base?.category ?? "relogio");
+  const [model, setModel] = useState(product?.model ?? (seed ? seed.model || seed.name : ""));
+  const [price, setPrice] = useState(centsToInput(base?.priceCents));
+  const [promo, setPromo] = useState(centsToInput(base?.promoPriceCents));
   const [featured, setFeatured] = useState(product?.featured ?? false);
   const [launch, setLaunch] = useState(product?.launch ?? false);
   const [active, setActive] = useState(product?.active ?? true);
   const [photos, setPhotos] = useState<string[]>(product?.photos ?? []);
   const wasShoe = product?.category === "calcado";
-  const [useVariations, setUseVariations] = useState((product?.variations.length ?? 0) > 0);
+  const [useVariations, setUseVariations] = useState((base?.variations.length ?? 0) > 0);
   const [variations, setVariations] = useState<{ label: string; stock: string }[]>(
-    (!wasShoe && product?.variations.map((v) => ({ label: v.label, stock: String(v.stock) }))) || [],
+    (!wasShoe && base?.variations.map((v) => ({ label: v.label, stock: product ? String(v.stock) : "0" }))) || [],
   );
   // Calçado: tamanhos escolhidos + estoque por (cor, tamanho).
-  const [sizes, setSizes] = useState<string[]>(() => (wasShoe ? sortSizes([...new Set(product!.variations.map((v) => v.label))]) : []));
+  const [sizes, setSizes] = useState<string[]>(() => (base?.category === "calcado" ? sortSizes([...new Set(base.variations.map((v) => v.label))]) : []));
   const [shoeStocks, setShoeStocks] = useState<Record<string, string>>(() =>
     wasShoe ? Object.fromEntries(product!.variations.map((v) => [stockKey(v.color ?? "", v.label), String(v.stock)])) : {},
   );
@@ -307,6 +320,7 @@ function ProductForm({
       name: name.trim(),
       description: description.trim(),
       category,
+      model: model.trim(),
       priceCents,
       promoPriceCents,
       featured,
@@ -322,7 +336,14 @@ function ProductForm({
     setBusy(true);
     try {
       if (product) await api.updateProduct(product.id, body);
-      else await api.createProduct(body);
+      else {
+        await api.createProduct(body);
+        // O produto de origem ainda não tinha modelo: passa a ter o mesmo, para os dois ficarem ligados.
+        if (seed && !seed.model && body.model) {
+          const { id: _id, ...rest } = seed;
+          await api.updateProduct(seed.id, { ...rest, model: body.model });
+        }
+      }
       onSaved(body.name, !product);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Não foi possível salvar.");
@@ -335,13 +356,26 @@ function ProductForm({
   return (
     <form onSubmit={submit} noValidate className="adm-form">
       <header className="adm-head">
-        <h1>{product ? "Editar produto" : "Novo produto"}</h1>
+        <h1>{product ? "Editar produto" : seed ? `Nova cor de ${seed.model || seed.name}` : "Novo produto"}</h1>
       </header>
 
       <section className="adm-card adm-fields">
         <label className="full">
           Nome
           <input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required />
+        </label>
+        <label className="full">
+          Modelo (opcional)
+          <input value={model} onChange={(e) => setModel(e.target.value)} maxLength={80} list="adm-models" placeholder="Ex.: Nike Air 1" />
+          <datalist id="adm-models">
+            {models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <small className="adm-muted">
+            Use o mesmo modelo nas cores do mesmo item (ex.: “Tênis Nike Air 1 Branco” e “… Preto”). Cada cor é um produto completo (fotos, descrição, preço,
+            tamanhos e estoque próprios) e aparece no catálogo e nos filtros; na página de cada um, o cliente vê as outras cores.
+          </small>
         </label>
         <label className="full">
           Descrição e detalhes

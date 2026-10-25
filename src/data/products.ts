@@ -39,6 +39,8 @@ export interface Product {
   name: string;
   description: string;
   category: CategoryId;
+  /** Mesmo modelo em outras cores = mesmo texto aqui ("" = sem grupo). */
+  model: string;
   /** Preço efetivo (já com promoção, se houver). */
   priceCents: number;
   /** Preço original quando há promoção. */

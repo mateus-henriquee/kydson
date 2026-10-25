@@ -851,3 +851,19 @@ describe("fotos por cor (mesmo modelo, várias cores)", () => {
     assert.equal(fs.existsSync(path.join(uploads, path.basename(a))), true);
   });
 });
+
+describe("modelo: mesmo item em cores diferentes, cada cor um produto", () => {
+  it("guarda o modelo e entrega no catálogo; cada cor tem preço, descrição e estoque próprios", async () => {
+    const o = await as("dono-modelo@x.com", "owner");
+    const mk = (name, color, price, desc, stock) =>
+      o.post("/api/products", product({ name, model: "Nike Air 1", category: "calcado", description: desc, priceCents: price, colors: [{ name: color, hex: color === "Preto" ? "#000000" : "#ffffff" }], variations: [{ label: "40", color, stock }] }));
+    const a = await mk("Nike Air 1 Branco", "Branco", 59900, "Couro branco", 4);
+    const b = await mk("Nike Air 1 Preto", "Preto", 62900, "Couro preto", 0);
+    assert.equal(a.status, 201);
+    const cat = (await anon().get("/api/catalog")).json.products.filter((p) => p.model === "Nike Air 1");
+    assert.equal(cat.length, 2);
+    assert.deepEqual(cat.map((p) => [p.priceCents, p.description, p.stock]).sort(), [[59900, "Couro branco", 4], [62900, "Couro preto", 0]].sort());
+    assert.equal((await o.post("/api/products", product({ model: "x".repeat(81) }))).status, 400);
+    assert.equal(b.json.product.model, "Nike Air 1");
+  });
+});

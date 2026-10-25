@@ -35,6 +35,7 @@ export function parseProduct(body, { ownsPhoto }) {
   if (!body || typeof body !== "object") throw bad("Dados inválidos.");
   const name = str(body.name, "Nome", { min: 1, max: 120 });
   const description = str(body.description ?? "", "Descrição", { max: 2000 });
+  const model = str(body.model ?? "", "Modelo", { max: 80 });
   if (!CATEGORIES.includes(body.category)) throw bad("Categoria inválida.");
   const priceCents = int(body.priceCents, "Preço");
   let promoPriceCents = null;
@@ -89,6 +90,7 @@ export function parseProduct(body, { ownsPhoto }) {
     name,
     description,
     category: body.category,
+    model,
     priceCents,
     promoPriceCents,
     featured: body.featured === true,

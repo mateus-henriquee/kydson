@@ -9,6 +9,7 @@ import { findVariation, sizesFor } from "./variants";
 import { maskCep, maskPhone, validateDelivery } from "./address";
 
 const prod = (over: Partial<Product>): Product => ({
+  model: "",
   id: 1,
   name: "A",
   description: "",
@@ -247,7 +248,7 @@ describe("entrada de dinheiro", () => {
 
 describe("calçados: tamanhos por cor", () => {
   const shoe = {
-    id: 1, name: "Bota", description: "", category: "calcado", priceCents: 1000, compareAtCents: null, featured: false, launch: false, stock: 24,
+    id: 1, name: "Bota", model: "", description: "", category: "calcado", priceCents: 1000, compareAtCents: null, featured: false, launch: false, stock: 24,
     colors: [{ name: "Marrom", hex: "#7b4a33" }, { name: "Preto", hex: "#000000" }],
     variations: [
       { label: "41", color: "Marrom", stock: 13 },

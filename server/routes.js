@@ -37,6 +37,7 @@ const productOut = (r) => ({
   name: r.name,
   description: r.description,
   category: r.category,
+  model: r.model,
   priceCents: r.price_cents,
   promoPriceCents: r.promo_price_cents,
   featured: r.featured,
@@ -82,6 +83,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
             name: r.name,
             description: r.description,
             category: r.category,
+            model: r.model,
             priceCents: promo ? r.promo_price_cents : r.price_cents,
             compareAtCents: promo ? r.price_cents : null,
             featured: r.featured,
@@ -257,7 +259,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
     }),
   );
 
-  const productParams = (p) => [p.name, p.description, p.category, p.priceCents, p.promoPriceCents, p.featured, p.launch, p.active, p.stock, JSON.stringify(p.variations), JSON.stringify(p.colors), JSON.stringify(p.photos)];
+  const productParams = (p) => [p.name, p.description, p.category, p.model, p.priceCents, p.promoPriceCents, p.featured, p.launch, p.active, p.stock, JSON.stringify(p.variations), JSON.stringify(p.colors), JSON.stringify(p.photos)];
 
   router.post(
     "/products",
@@ -265,8 +267,8 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
     wrap(async (req, res) => {
       const p = parseProduct(req.body, { ownsPhoto: storage.owns });
       const { rows } = await db.query(
-        `insert into products (name, description, category, price_cents, promo_price_cents, featured, launch, active, stock, variations, colors, photos)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+        `insert into products (name, description, category, model, price_cents, promo_price_cents, featured, launch, active, stock, variations, colors, photos)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
         productParams(p),
       );
       res.status(201).json({ product: productOut(rows[0]) });
@@ -282,8 +284,8 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       const old = (await db.query("select photos, colors from products where id = $1", [id])).rows[0];
       if (!old) throw new HttpError(404, "Produto não encontrado.");
       const { rows } = await db.query(
-        `update products set name=$1, description=$2, category=$3, price_cents=$4, promo_price_cents=$5, featured=$6, launch=$7, active=$8, stock=$9,
-           variations=$10, colors=$11, photos=$12, updated_at=now() where id=$13 returning *`,
+        `update products set name=$1, description=$2, category=$3, model=$4, price_cents=$5, promo_price_cents=$6, featured=$7, launch=$8, active=$9, stock=$10,
+           variations=$11, colors=$12, photos=$13, updated_at=now() where id=$14 returning *`,
         [...productParams(p), id],
       );
       const keep = new Set(allPhotos(p));

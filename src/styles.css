@@ -1630,3 +1630,45 @@ html {
     transform: none;
   }
 }
+
+/* ===== Mesmo modelo em outras cores ===== */
+.family {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.family__item {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  width: 76px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  color: var(--bone);
+  text-decoration: none;
+  font-size: 12px;
+  text-align: center;
+}
+.family__item[aria-current="page"] {
+  border-color: var(--gold);
+}
+.family__item:hover {
+  border-color: var(--bone);
+}
+.family__item img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+}
+.family__dot {
+  border: 1px solid var(--line);
+  width: 64px;
+  height: 64px;
+  display: block;
+}
+.family__item small {
+  color: var(--mute);
+}

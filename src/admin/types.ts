@@ -31,6 +31,8 @@ export interface AdminProduct {
   name: string;
   description: string;
   category: Category;
+  /** Agrupa o mesmo item em cores diferentes ("" = nenhum). */
+  model: string;
   priceCents: number;
   promoPriceCents: number | null;
   featured: boolean;
