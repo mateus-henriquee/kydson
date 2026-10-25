@@ -31,7 +31,9 @@ export function createApp(deps) {
     if (status >= 500) console.error(err);
     const message =
       status >= 500
-        ? "Erro interno. Tente novamente."
+        ? err.code === "42703" || err.code === "42P01"
+          ? "Banco de dados desatualizado: rode as migrações (npm run db:migrate) e tente de novo."
+          : "Erro interno. Tente novamente."
         : err.type === "entity.parse.failed"
           ? "JSON inválido."
           : err.type === "entity.too.large"

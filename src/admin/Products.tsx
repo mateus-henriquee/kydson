@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { centsToInput, formatBRL, parseMoneyInput } from "../lib/money";
 import { api, ApiError } from "./api";
 import { Confirm } from "./Confirm";
-import { ColorPhotos } from "./ColorPhotos";
+import { ModelPicker } from "./ModelPicker";
 import { ShoeStock, shoeVariations, sortSizes, stockKey } from "./ShoeStock";
 import { CATEGORIES, categoryLabel, type AdminProduct, type Category, type ProductInput, type ProductColor, type Variation } from "./types";
 
@@ -364,19 +364,7 @@ function ProductForm({
           Nome
           <input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required />
         </label>
-        <label className="full">
-          Modelo (opcional)
-          <input value={model} onChange={(e) => setModel(e.target.value)} maxLength={80} list="adm-models" placeholder="Ex.: Nike Air 1" />
-          <datalist id="adm-models">
-            {models.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-          <small className="adm-muted">
-            Use o mesmo modelo nas cores do mesmo item (ex.: “Tênis Nike Air 1 Branco” e “… Preto”). Cada cor é um produto completo (fotos, descrição, preço,
-            tamanhos e estoque próprios) e aparece no catálogo e nos filtros; na página de cada um, o cliente vê as outras cores.
-          </small>
-        </label>
+        <ModelPicker value={model} models={models} onChange={setModel} />
         <label className="full">
           Descrição e detalhes
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} maxLength={2000} placeholder="Material, medidas, caixa, garantia…" />
@@ -446,8 +434,6 @@ function ProductForm({
         </label>
         {uploading && <p className="adm-muted">Enviando…</p>}
       </section>
-
-      <ColorPhotos colors={colors} setColors={setColors} />
 
       {isShoe && (
         <ShoeStock
