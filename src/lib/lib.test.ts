@@ -6,7 +6,8 @@ import { categoryFromSlug, discountPct, type Product } from "../data/products";
 import { applyFilters, collectColors, collectSizes, EMPTY_FILTERS, hasActiveFilters, priceBounds, recommend } from "./catalogFilter";
 import { parseRoute } from "./router";
 import { findVariation, sizesFor } from "./variants";
-import { maskCep, maskPhone, validateDelivery } from "./address";
+import { cpfOk, maskCep, maskCpf, maskPhone, validateDelivery } from "./address";
+import { shippingFor } from "./shipping";
 
 const prod = (over: Partial<Product>): Product => ({
   model: "",
@@ -270,5 +271,27 @@ describe("calçados: tamanhos por cor", () => {
   });
   it("reconhece a rota /catalogo/calcados", () => {
     expect(categoryFromSlug("calcados")).toBe("calcado");
+  });
+});
+
+describe("CPF e frete grátis", () => {
+  it("valida CPF pelos dígitos verificadores e aplica máscara", () => {
+    expect(cpfOk("529.982.247-25")).toBe(true);
+    expect(cpfOk("52998224724")).toBe(false);
+    expect(cpfOk("111.111.111-11")).toBe(false);
+    expect(cpfOk("123")).toBe(false);
+    expect(maskCpf("52998224725")).toBe("529.982.247-25");
+    expect(maskCpf("5299")).toBe("529.9");
+  });
+  it("validateDelivery só cobra CPF quando informado", () => {
+    const a = { cep: "01310-100", street: "Rua A", number: "1", complement: "", neighborhood: "Centro", city: "SP", state: "SP" };
+    expect(validateDelivery("Ana", "(11) 99999-8888", a)).toBe("");
+    expect(validateDelivery("Ana", "(11) 99999-8888", a, "123")).toMatch(/CPF/);
+    expect(validateDelivery("Ana", "(11) 99999-8888", a, "529.982.247-25")).toBe("");
+  });
+  it("frete grátis só acima do mínimo", () => {
+    expect(shippingFor(35000, 2000, 35000)).toBe(2000);
+    expect(shippingFor(35001, 2000, 35000)).toBe(0);
+    expect(shippingFor(99999, 2000, 0)).toBe(2000);
   });
 });

@@ -1672,3 +1672,13 @@ html {
 .family__item small {
   color: var(--mute);
 }
+
+/* forma de envio + "ou" */
+.methods{border:0;margin:1.25rem 0 0;padding:0;display:grid;gap:.6rem}
+.methods legend{padding:0;margin-bottom:.6rem}
+.method{display:flex;gap:.75rem;align-items:flex-start;padding:.85rem 1rem;border:1px solid var(--line,rgba(255,255,255,.18));border-radius:10px;cursor:pointer}
+.method.is-on{border-color:var(--gold,#c9a24b)}
+.method input{margin-top:.25rem;accent-color:var(--gold,#c9a24b)}
+.method small{display:block;opacity:.75;margin-top:.15rem}
+.method:focus-within{outline:2px solid var(--gold,#c9a24b);outline-offset:2px}
+.form__or{text-align:center;margin:.9rem 0;opacity:.7}

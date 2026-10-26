@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { request } from "../lib/http";
-import { emptyAddress, maskPhone, toAddressForm, validateDelivery, type AddressForm } from "../lib/address";
+import { emptyAddress, maskCpf, maskPhone, toAddressForm, validateDelivery, type AddressForm } from "../lib/address";
 import { formatBRL } from "../lib/money";
 import { fmtDateTime, STATUS_LABEL, type MyOrder } from "../lib/orders";
 import { Link, navigate } from "../lib/router";
@@ -11,6 +11,7 @@ export function AccountPage() {
   const auth = useAuth();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [cpf, setCpf] = useState("");
   const [addr, setAddr] = useState<AddressForm>(emptyAddress);
   const [orders, setOrders] = useState<MyOrder[] | null>(null);
   const [msg, setMsg] = useState("");
@@ -28,6 +29,7 @@ export function AccountPage() {
     if (!auth.user) return;
     setName(auth.user.name ?? "");
     setPhone(auth.user.phone ? maskPhone(auth.user.phone) : "");
+    setCpf(auth.user.cpf ? maskCpf(auth.user.cpf) : "");
     setAddr(toAddressForm(auth.user.address));
     request<{ orders: MyOrder[] }>("GET", "/api/my/orders")
       .then((r) => setOrders(r.orders))
@@ -47,12 +49,12 @@ export function AccountPage() {
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setMsg("");
-    const problem = validateDelivery(name, phone, addr);
+    const problem = validateDelivery(name, phone, addr, cpf);
     if (problem) return setError(problem);
     setError("");
     setBusy(true);
     try {
-      await auth.saveProfile({ name: name.trim(), phone, address: addr });
+      await auth.saveProfile({ name: name.trim(), phone, cpf, address: addr });
       setMsg("Dados salvos.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível salvar.");
@@ -98,6 +100,10 @@ export function AccountPage() {
             <label className="field">
               Telefone / WhatsApp
               <input value={phone} onChange={(e) => setPhone(maskPhone(e.target.value))} inputMode="tel" autoComplete="tel" required />
+            </label>
+            <label className="field">
+              CPF
+              <input value={cpf} onChange={(e) => setCpf(maskCpf(e.target.value))} inputMode="numeric" autoComplete="off" placeholder="000.000.000-00" required />
             </label>
           </div>
           <h2 className="form__h">Endereço de entrega</h2>

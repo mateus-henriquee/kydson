@@ -14,7 +14,7 @@ import {
 } from "./orders.js";
 import { applyPayment, handleWebhook } from "./payments.js";
 import { parseCheckout, parseId, parseOrder, parseProduct, parseProfile, parseUser, parseUuid } from "./validate.js";
-import { getSettings, parseSettings, saveSettings } from "./settings.js";
+import { getSettings, parseSettings, saveSettings, shippingFor } from "./settings.js";
 import { notifyOrderPaid } from "./whatsapp.js";
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -51,7 +51,7 @@ const productOut = (r) => ({
   updatedAt: iso(r.updated_at),
 });
 
-const profileOut = (p) => ({ id: p.id, email: p.email, name: p.name, phone: p.phone, address: p.address, role: p.role });
+const profileOut = (p) => ({ id: p.id, email: p.email, name: p.name, phone: p.phone, cpf: p.cpf ?? "", address: p.address, role: p.role });
 const teamOut = (p) => ({ id: p.id, name: p.name, email: p.email, role: p.role, active: p.active, createdAt: iso(p.created_at) });
 
 export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20_000 }) {
@@ -76,6 +76,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       const settings = await getSettings(db);
       res.json({
         shippingCents: settings.shippingCents,
+        freeShippingFromCents: settings.freeShippingFromCents,
         products: rows.map((r) => {
           const promo = r.promo_price_cents !== null && r.promo_price_cents < r.price_cents;
           return {
@@ -117,8 +118,8 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       const p = parseProfile(req.body);
       const cur = req.user;
       const { rows } = await db.query(
-        "update profiles set name = $2, phone = $3, address = $4 where id = $1 returning id, email, name, phone, address, role",
-        [cur.id, p.name ?? cur.name, p.phone ?? cur.phone, p.address === undefined ? (cur.address ? JSON.stringify(cur.address) : null) : p.address ? JSON.stringify(p.address) : null],
+        "update profiles set name = $2, phone = $3, address = $4, cpf = $5 where id = $1 returning id, email, name, phone, cpf, address, role",
+        [cur.id, p.name ?? cur.name, p.phone ?? cur.phone, p.address === undefined ? (cur.address ? JSON.stringify(cur.address) : null) : p.address ? JSON.stringify(p.address) : null, p.cpf ?? cur.cpf ?? ""],
       );
       res.json({ user: profileOut(rows[0]) });
     }),
@@ -190,8 +191,10 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
 
       const settings = await getSettings(db);
       const expiresAt = new Date(Date.now() + settings.reserveMinutes * 60_000);
+      let shippingCents = 0;
       const { order, lines } = await db.tx(async (t) => {
         const lines = await reserveItems(t, input.items);
+        shippingCents = shippingFor(settings, lines.reduce((n, l) => n + l.unit * l.qty, 0));
         const order = await insertOrder(
           t,
           {
@@ -200,15 +203,17 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
             customerName: input.name,
             customerEmail: req.user.email,
             customerPhone: input.phone,
+            customerCpf: input.cpf,
+            shippingMethod: input.method,
             shipping: input.shipping,
             status: "pending",
             expiresAt,
-            shippingCents: settings.shippingCents,
+            shippingCents,
           },
           lines,
         );
         // Guarda nome, telefone e endereço como padrão para a próxima compra.
-        await t.query("update profiles set name = $2, phone = $3, address = $4 where id = $1", [req.user.id, input.name, input.phone, JSON.stringify(input.shipping)]);
+        await t.query("update profiles set name = $2, phone = $3, address = $4, cpf = $5 where id = $1", [req.user.id, input.name, input.phone, JSON.stringify(input.shipping), input.cpf]);
         return { order, lines };
       });
 
@@ -220,7 +225,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
           payer: { name: input.name, email: req.user.email },
           siteUrl: baseUrl(req),
           expiresAt,
-          shippingCents: settings.shippingCents,
+          shippingCents,
         });
         if (!pref?.url) throw new Error("sem link de pagamento");
       } catch (e) {

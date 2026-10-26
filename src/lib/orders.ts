@@ -13,6 +13,7 @@ export interface MyOrder {
   status: "pending" | "paid" | "canceled";
   totalCents: number;
   shippingCents?: number;
+  shippingMethod?: string;
   createdAt: string;
   paidAt: string | null;
   expiresAt: string | null;

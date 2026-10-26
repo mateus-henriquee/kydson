@@ -92,6 +92,8 @@ export interface Order {
   customerName: string;
   customerEmail: string | null;
   customerPhone: string | null;
+  customerCpf?: string;
+  shippingMethod?: string;
   shipping: OrderShipping | null;
   note: string;
   status: OrderStatus;
@@ -132,4 +134,5 @@ export interface Customer {
 export interface StoreSettings {
   shippingCents: number;
   reserveMinutes: number;
+  freeShippingFromCents: number;
 }

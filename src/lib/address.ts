@@ -35,10 +35,33 @@ export const phoneOk = (v: string) => {
   return d.length === 10 || d.length === 11;
 };
 
+/** 000.000.000-00 */
+export function maskCpf(v: string): string {
+  const d = digits(v).slice(0, 11);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+  if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+/** Confere os dígitos verificadores do CPF. */
+export function cpfOk(v: string): boolean {
+  const d = digits(v);
+  if (d.length !== 11 || /^(\d)\1+$/.test(d)) return false;
+  const calc = (n: number) => {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += Number(d[i]) * (n + 1 - i);
+    const r = (sum * 10) % 11;
+    return r === 10 ? 0 : r;
+  };
+  return calc(9) === Number(d[9]) && calc(10) === Number(d[10]);
+}
+
 /** Primeira mensagem de erro (ou "") para o formulário de entrega. */
-export function validateDelivery(name: string, phone: string, a: AddressForm): string {
+export function validateDelivery(name: string, phone: string, a: AddressForm, cpf?: string): string {
   if (name.trim().length < 2) return "Informe seu nome.";
   if (!phoneOk(phone)) return "Informe o telefone com DDD.";
+  if (cpf !== undefined && !cpfOk(cpf)) return "CPF inválido. Confira os 11 números.";
   if (digits(a.cep).length !== 8) return "Informe o CEP com 8 números.";
   if (a.street.trim().length < 2) return "Informe a rua.";
   if (!a.number.trim()) return "Informe o número (ou S/N).";

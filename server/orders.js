@@ -72,8 +72,8 @@ export async function insertOrder(t, o, lines) {
   const shippingCents = o.shippingCents ?? 0;
   const total = lines.reduce((s, l) => s + l.unit * l.qty, 0) + shippingCents;
   const { rows } = await t.query(
-    `insert into orders (source, customer_id, customer_name, customer_email, customer_phone, shipping, note, status, total_cents, created_by, paid_at, expires_at, shipping_cents)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
+    `insert into orders (source, customer_id, customer_name, customer_email, customer_phone, shipping, note, status, total_cents, created_by, paid_at, expires_at, shipping_cents, customer_cpf, shipping_method)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
     [
       o.source,
       o.customerId ?? null,
@@ -88,6 +88,8 @@ export async function insertOrder(t, o, lines) {
       o.status === "paid" ? new Date() : null,
       o.expiresAt ?? null,
       shippingCents,
+      o.customerCpf ?? "",
+      o.shippingMethod ?? "",
     ],
   );
   for (const l of lines)
@@ -161,6 +163,8 @@ export async function staffOrders(db, rows) {
     customerName: o.customer_name,
     customerEmail: o.customer_email,
     customerPhone: o.customer_phone,
+    customerCpf: o.customer_cpf,
+    shippingMethod: o.shipping_method,
     shipping: o.shipping,
     note: o.note,
     status: o.status,
@@ -187,6 +191,7 @@ export async function customerOrders(db, rows) {
     status: o.status,
     totalCents: o.total_cents,
     shippingCents: o.shipping_cents,
+    shippingMethod: o.shipping_method,
     createdAt: iso(o.created_at),
     paidAt: iso(o.paid_at),
     expiresAt: iso(o.expires_at),

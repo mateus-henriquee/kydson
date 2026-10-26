@@ -32,7 +32,7 @@ export function createAuth({ db, provider }) {
     const { rows } = await db.query(
       `insert into profiles (id, email, name) values ($1, $2, $3)
        on conflict (id) do update set email = excluded.email
-       returning id, email, name, phone, address, role, active`,
+       returning id, email, name, phone, cpf, address, role, active`,
       [u.id, u.email ?? "", u.name ?? ""],
     );
     const p = rows[0];

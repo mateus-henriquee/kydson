@@ -5,7 +5,7 @@ Guarde cada chave em um bloco de notas; você vai colá-las na Vercel no passo 4
 
 ## 1. Supabase (banco, login e fotos)
 1. Crie conta em supabase.com → **New project** (região São Paulo). Anote a senha do banco.
-2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois `0002_calcados_perfis_config.sql` e `0003_modelo.sql`, um de cada vez → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
+2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois `0002_calcados_perfis_config.sql`, `0003_modelo.sql` e `0004_cpf_envio.sql`, um de cada vez → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
 3. **Project Settings → API**: copie `Project URL` (→ `SUPABASE_URL` e `VITE_SUPABASE_URL`), `anon public` (→ `VITE_SUPABASE_ANON_KEY`) e `service_role` (→ `SUPABASE_SERVICE_ROLE_KEY`, **secreta**).
 4. **Project Settings → Database → Connection string → Transaction pooler** (porta 6543): copie a URL, troque `[YOUR-PASSWORD]` pela senha (→ `DATABASE_URL`).
 5. **Authentication → Providers → Email**: deixe ligado. Recomendado: manter "Confirm email" ligado.
@@ -55,3 +55,9 @@ Entre em `https://SEU-SITE/painel`. Outros colaboradores: aba **Equipe**.
 - Fotos: até 4 MB cada (limite da Vercel).
 - Reserva de estoque: 30 min. Pagamento aprovado após expirar tenta reservar de novo; se não der, o pedido fica marcado para conferência no painel.
 - Nunca coloque `SUPABASE_SERVICE_ROLE_KEY`, `MP_ACCESS_TOKEN` ou `WHATSAPP_TOKEN` com prefixo `VITE_`.
+
+## Envio, CPF e frete grátis
+- No checkout o cliente informa **CPF** e escolhe **Uber Moto** ou **Correios**. Entrega para todo o Brasil.
+- **Frete grátis** acima de R$ 350,00 (só produtos; exatamente R$ 350,00 ainda paga frete). Mude em Painel → Configurações (0,00 desliga). O frete normal é um valor fixo, igual para as duas formas.
+- O CPF e a forma de envio aparecem em Painel → Pedidos. O aviso de WhatsApp da loja não mudou (mesmo modelo `pedido_pago`).
+- Botão **Comprar pelo WhatsApp** (carrinho e checkout): abre a conversa com o pedido, envio e endereço. Não cria pedido no painel nem reserva estoque.

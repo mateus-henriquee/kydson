@@ -3,6 +3,7 @@ import { STORE } from "../config/store";
 import { formatBRL } from "../lib/money";
 import { buildOrderMessage, buildWhatsAppUrl, normalizePhone } from "../lib/whatsapp";
 import { Link } from "../lib/router";
+import { useCatalog } from "../state/CatalogContext";
 import { useAuth } from "../state/AuthContext";
 import { useCart } from "../state/CartContext";
 
@@ -27,6 +28,7 @@ export function CartDrawer() {
     }
   }, [open, setOpen]);
 
+  const { shippingCents, freeShippingFromCents } = useCatalog();
   const phoneOk = normalizePhone(STORE.whatsappNumber) !== null;
   const url = phoneOk && lines.length > 0 ? buildWhatsAppUrl(STORE.whatsappNumber, buildOrderMessage(lines)) : null;
 
@@ -82,6 +84,15 @@ export function CartDrawer() {
                 <span>Subtotal</span>
                 <strong>{formatBRL(totalCents)}</strong>
               </div>
+              {freeShippingFromCents > 0 && (
+                <p className="drawer__note" role="status">
+                  {totalCents > freeShippingFromCents
+                    ? "Você ganhou frete grátis!"
+                    : shippingCents > 0
+                      ? `Frete grátis em compras acima de ${formatBRL(freeShippingFromCents)}. Faltam ${formatBRL(freeShippingFromCents + 1 - totalCents)}.`
+                      : null}
+                </p>
+              )}
               <p className="drawer__note">
                 {user ? "Você paga com segurança pelo Mercado Pago." : "Para pagar é preciso criar uma conta (leva 1 minuto)."}
               </p>
@@ -91,7 +102,7 @@ export function CartDrawer() {
               </Link>
               {url && (
                 <a className="btn btn--ghost btn--block" href={url} target="_blank" rel="noopener noreferrer">
-                  Combinar pelo WhatsApp
+                  Comprar pelo WhatsApp
                 </a>
               )}
               <button className="link" onClick={clear}>

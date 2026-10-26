@@ -156,6 +156,20 @@ export function parsePhone(v, label = "Telefone") {
   return digits;
 }
 
+export function parseCpf(v) {
+  const d = String(v ?? "").replace(/\D/g, "");
+  const calc = (n) => {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += Number(d[i]) * (n + 1 - i);
+    const r = (sum * 10) % 11;
+    return r === 10 ? 0 : r;
+  };
+  if (d.length !== 11 || /^(\d)\1+$/.test(d) || calc(9) !== Number(d[9]) || calc(10) !== Number(d[10])) throw bad("CPF inválido.");
+  return d;
+}
+
+export const SHIPPING_METHODS = ["uber_moto", "correios"];
+
 export function parseAddress(a) {
   if (!a || typeof a !== "object") throw bad("Informe o endereço de entrega.");
   const cep = String(a.cep ?? "").replace(/\D/g, "");
@@ -179,6 +193,7 @@ export function parseProfile(body) {
   if (body.name !== undefined) out.name = str(body.name, "Nome", { min: 2, max: 80 });
   if (body.phone !== undefined) out.phone = body.phone === "" ? "" : parsePhone(body.phone);
   if (body.address !== undefined) out.address = body.address === null ? null : parseAddress(body.address);
+  if (body.cpf !== undefined) out.cpf = body.cpf === "" ? "" : parseCpf(body.cpf);
   return out;
 }
 
@@ -197,6 +212,8 @@ export function parseCheckout(body) {
     items,
     name: str(body.name ?? "", "Nome", { min: 2, max: 80 }),
     phone: parsePhone(body.phone),
+    cpf: parseCpf(body.cpf),
+    method: SHIPPING_METHODS.includes(body.method) ? body.method : (() => { throw bad("Escolha a forma de envio."); })(),
     shipping: parseAddress(body.shipping),
   };
 }

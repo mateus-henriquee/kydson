@@ -1,6 +1,6 @@
 import { HttpError } from "./auth.js";
 
-export const DEFAULT_SETTINGS = { shippingCents: 0, reserveMinutes: 30 };
+export const DEFAULT_SETTINGS = { shippingCents: 0, reserveMinutes: 30, freeShippingFromCents: 35000 };
 
 export async function getSettings(db) {
   const { rows } = await db.query("select key, value from settings");
@@ -12,13 +12,20 @@ export async function getSettings(db) {
 export function parseSettings(body) {
   const bad = (m) => new HttpError(400, m);
   if (!body || typeof body !== "object") throw bad("Dados inválidos.");
-  const { shippingCents, reserveMinutes } = body;
+  const { shippingCents, reserveMinutes, freeShippingFromCents } = body;
   if (!Number.isInteger(shippingCents) || shippingCents < 0 || shippingCents > 1_000_000) throw bad("Frete inválido.");
   if (!Number.isInteger(reserveMinutes) || reserveMinutes < 5 || reserveMinutes > 1440) throw bad("A reserva deve ser entre 5 e 1440 minutos.");
-  return { shippingCents, reserveMinutes };
+  if (!Number.isInteger(freeShippingFromCents) || freeShippingFromCents < 0 || freeShippingFromCents > 100_000_000) throw bad("Valor do frete grátis inválido.");
+  return { shippingCents, reserveMinutes, freeShippingFromCents };
 }
 
 export async function saveSettings(db, s) {
   for (const [k, v] of Object.entries(s))
     await db.query("insert into settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value", [k, JSON.stringify(v)]);
+}
+
+/** Frete grátis quando o valor dos produtos é MAIOR que o mínimo (0 = desligado). */
+export function shippingFor(settings, itemsCents) {
+  const min = settings.freeShippingFromCents;
+  return min > 0 && itemsCents > min ? 0 : settings.shippingCents;
 }

@@ -10,6 +10,7 @@ export interface Profile {
   email: string;
   name: string;
   phone: string;
+  cpf?: string;
   address: AddressForm | null;
   role: Role;
 }
@@ -26,7 +27,7 @@ interface AuthCtx {
   signOut: () => Promise<void>;
   sendReset: (email: string) => Promise<void>;
   setNewPassword: (password: string) => Promise<void>;
-  saveProfile: (patch: Partial<{ name: string; phone: string; address: AddressForm | null }>) => Promise<void>;
+  saveProfile: (patch: Partial<{ name: string; phone: string; cpf: string; address: AddressForm | null }>) => Promise<void>;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);

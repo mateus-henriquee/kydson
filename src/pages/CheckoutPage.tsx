@@ -1,20 +1,26 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, request } from "../lib/http";
-import { emptyAddress, maskPhone, toAddressForm, validateDelivery, type AddressForm } from "../lib/address";
+import { emptyAddress, maskCpf, maskPhone, toAddressForm, validateDelivery, type AddressForm } from "../lib/address";
 import { formatBRL } from "../lib/money";
 import { Link, navigate } from "../lib/router";
 import { useAuth } from "../state/AuthContext";
 import { useCatalog } from "../state/CatalogContext";
 import { useCart } from "../state/CartContext";
+import { STORE } from "../config/store";
+import { SHIPPING_METHODS, methodLabel, shippingFor, type ShippingMethod } from "../lib/shipping";
+import { buildOrderMessage, buildWhatsAppUrl, normalizePhone } from "../lib/whatsapp";
 import { AddressFields } from "../components/AddressFields";
 
 export function CheckoutPage() {
   const auth = useAuth();
   const cart = useCart();
-  const { shippingCents } = useCatalog();
+  const { shippingCents: fee, freeShippingFromCents } = useCatalog();
+  const shippingCents = shippingFor(cart.totalCents, fee, freeShippingFromCents);
   const grand = cart.totalCents + shippingCents;
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [cpf, setCpf] = useState("");
+  const [method, setMethod] = useState<ShippingMethod | "">("");
   const [addr, setAddr] = useState<AddressForm>(emptyAddress);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,6 +40,7 @@ export function CheckoutPage() {
     if (auth.user && !filled) {
       setName(auth.user.name ?? "");
       setPhone(auth.user.phone ? maskPhone(auth.user.phone) : "");
+      setCpf(auth.user.cpf ? maskCpf(auth.user.cpf) : "");
       setAddr(toAddressForm(auth.user.address));
       setFilled(true);
     }
@@ -61,9 +68,24 @@ export function CheckoutPage() {
     );
   }
 
+  const waOk = normalizePhone(STORE.whatsappNumber) !== null;
+  const waUrl = () => {
+    const problem = validateDelivery(name, phone, addr) || (method ? "" : "Escolha a forma de envio.");
+    if (problem) {
+      setError(problem);
+      return null;
+    }
+    setError("");
+    const address = `${addr.street}, ${addr.number}${addr.complement ? ` (${addr.complement})` : ""} - ${addr.neighborhood} - ${addr.city}/${addr.state} - CEP ${addr.cep}`;
+    return buildWhatsAppUrl(
+      STORE.whatsappNumber,
+      buildOrderMessage(cart.lines, { name: name.trim(), phone, address, method: methodLabel(method), shippingCents }),
+    );
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const problem = validateDelivery(name, phone, addr);
+    const problem = validateDelivery(name, phone, addr, cpf) || (method ? "" : "Escolha a forma de envio.");
     if (problem) return setError(problem);
     setError("");
     setBusy(true);
@@ -72,6 +94,8 @@ export function CheckoutPage() {
         items: cart.lines.map((l) => ({ productId: l.product.id, variation: l.variation, color: l.color, qty: l.qty })),
         name: name.trim(),
         phone,
+        cpf,
+        method,
         shipping: addr,
       });
       cart.clear();
@@ -100,9 +124,26 @@ export function CheckoutPage() {
               Telefone / WhatsApp
               <input value={phone} onChange={(e) => setPhone(maskPhone(e.target.value))} inputMode="tel" autoComplete="tel" placeholder="(11) 99999-8888" required disabled={busy} />
             </label>
+            <label className="field">
+              CPF
+              <input value={cpf} onChange={(e) => setCpf(maskCpf(e.target.value))} inputMode="numeric" autoComplete="off" placeholder="000.000.000-00" required disabled={busy} />
+            </label>
           </div>
           <h2 className="form__h">Endereço de entrega</h2>
+          <p className="form__hint">Entregamos em todo o Brasil.</p>
           <AddressFields value={addr} onChange={setAddr} disabled={busy} />
+          <fieldset className="methods" disabled={busy}>
+            <legend className="form__h">Forma de envio</legend>
+            {SHIPPING_METHODS.map((m) => (
+              <label key={m.id} className={`method ${method === m.id ? "is-on" : ""}`}>
+                <input type="radio" name="method" value={m.id} checked={method === m.id} onChange={() => setMethod(m.id)} />
+                <span>
+                  <strong>{m.label}</strong>
+                  <small>{m.hint}</small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
           {error && (
             <p className="form__error" role="alert">
               {error}
@@ -112,6 +153,23 @@ export function CheckoutPage() {
             {busy ? "Abrindo pagamento…" : `Pagar ${formatBRL(grand)} com Mercado Pago`}
           </button>
           <p className="form__hint">Você será levado ao Mercado Pago. O estoque fica reservado por 30 minutos.</p>
+          {waOk && (
+            <>
+              <p className="form__or">ou</p>
+              <button
+                type="button"
+                className="btn btn--ghost btn--block"
+                disabled={busy}
+                onClick={() => {
+                  const u = waUrl();
+                  if (u) window.open(u, "_blank", "noopener,noreferrer");
+                }}
+              >
+                Comprar pelo WhatsApp
+              </button>
+              <p className="form__hint">Abre a conversa com a loja já com o pedido, o envio e o endereço. O pagamento é combinado por lá.</p>
+            </>
+          )}
         </form>
 
         <aside className="summary" aria-label="Resumo do pedido">
@@ -127,11 +185,12 @@ export function CheckoutPage() {
               </li>
             ))}
           </ul>
-          {shippingCents > 0 && (
-            <div className="sum">
-              <span>Frete</span>
-              <strong>{formatBRL(shippingCents)}</strong>
-            </div>
+          <div className="sum">
+            <span>Frete{method ? ` (${methodLabel(method)})` : ""}</span>
+            <strong>{shippingCents > 0 ? formatBRL(shippingCents) : "Grátis"}</strong>
+          </div>
+          {freeShippingFromCents > 0 && shippingCents > 0 && (
+            <p className="form__hint">Frete grátis em compras acima de {formatBRL(freeShippingFromCents)}.</p>
           )}
           <div className="sum">
             <span>Total</span>

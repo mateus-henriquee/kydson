@@ -7,6 +7,7 @@ export function Settings() {
   const [mp, setMp] = useState<{ provider: string; configured: boolean } | null>(null);
   const [wa, setWa] = useState(false);
   const [freight, setFreight] = useState("0,00");
+  const [freeFrom, setFreeFrom] = useState("350,00");
   const [minutes, setMinutes] = useState("30");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -19,6 +20,7 @@ export function Settings() {
         setMp(r.payments);
         setWa(r.whatsapp.configured);
         setFreight(centsToInput(r.settings.shippingCents) || "0,00");
+        setFreeFrom(centsToInput(r.settings.freeShippingFromCents) || "0,00");
         setMinutes(String(r.settings.reserveMinutes));
         setLoaded(true);
       })
@@ -30,12 +32,14 @@ export function Settings() {
     setError("");
     setNotice("");
     const shippingCents = parseMoneyInput(freight || "0");
+    const freeShippingFromCents = parseMoneyInput(freeFrom || "0");
     const reserveMinutes = Number(minutes);
     if (shippingCents === null) return setError("Frete inválido (ex.: 25,00).");
+    if (freeShippingFromCents === null) return setError("Valor do frete grátis inválido (ex.: 350,00).");
     if (!Number.isInteger(reserveMinutes) || reserveMinutes < 5 || reserveMinutes > 1440) return setError("A reserva deve ser entre 5 e 1440 minutos.");
     setBusy(true);
     try {
-      await api.saveSettings({ shippingCents, reserveMinutes });
+      await api.saveSettings({ shippingCents, reserveMinutes, freeShippingFromCents });
       setNotice("Configurações salvas.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Não foi possível salvar.");
@@ -71,7 +75,12 @@ export function Settings() {
         <label>
           Frete fixo (R$)
           <input value={freight} onChange={(e) => setFreight(e.target.value)} inputMode="decimal" disabled={!loaded} />
-          <small className="adm-muted">Somado a todos os pedidos do site. Não há cálculo por CEP/transportadora (exige integração).</small>
+          <small className="adm-muted">Cobrado nos pedidos do site (Uber Moto ou Correios). Não há cálculo por CEP/transportadora (exige integração).</small>
+        </label>
+        <label>
+          Frete grátis acima de (R$)
+          <input value={freeFrom} onChange={(e) => setFreeFrom(e.target.value)} inputMode="decimal" disabled={!loaded} />
+          <small className="adm-muted">Compras com produtos acima deste valor não pagam frete. Use 0,00 para desligar.</small>
         </label>
         <label>
           Reserva do estoque aguardando pagamento (minutos)

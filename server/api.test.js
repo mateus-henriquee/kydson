@@ -115,7 +115,7 @@ function client(token, id) {
 const anon = () => client(null);
 const product = (over = {}) => ({ name: "Relógio Teste", description: "d", category: "relogio", priceCents: 10000, stock: 5, ...over });
 const addr = { cep: "01310-100", street: "Av. Paulista", number: "1000", complement: "apto 5", neighborhood: "Bela Vista", city: "São Paulo", state: "SP" };
-const checkoutBody = (items, over = {}) => ({ items, name: "Maria Cliente", phone: "(11) 99999-8888", shipping: addr, ...over });
+const checkoutBody = (items, over = {}) => ({ items, name: "Maria Cliente", phone: "(11) 99999-8888", cpf: "529.982.247-25", method: "correios", shipping: addr, ...over });
 const stockOf = async (id) => (await db.query("select stock, variations from products where id = $1", [id])).rows[0];
 const status = async (id) => (await db.query("select * from orders where id = $1", [id])).rows[0];
 
@@ -278,6 +278,11 @@ describe("checkout (conta obrigatória)", () => {
     assert.equal((await c.post("/api/checkout", checkoutBody(it, { shipping: { ...addr, cep: "123" } }))).status, 400);
     assert.equal((await c.post("/api/checkout", checkoutBody(it, { shipping: { ...addr, state: "XX" } }))).status, 400);
     assert.equal((await c.post("/api/checkout", checkoutBody(it, { name: "" }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { cpf: "111.111.111-11" }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { cpf: "529.982.247-24" }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { cpf: "" }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { method: "sedex" }))).status, 400);
+    assert.equal((await c.post("/api/checkout", checkoutBody(it, { method: undefined }))).status, 400);
     assert.equal((await c.post("/api/checkout", checkoutBody([]))).status, 400);
     assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 11 }]))).status, 400);
     assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 3 }]))).status, 400); // só há 2
@@ -788,9 +793,9 @@ describe("calçados, perfis, clientes e configurações", () => {
   });
 
   it("frete e prazo de reserva: valida, entra no total e no Mercado Pago", async () => {
-    assert.equal((await owner.put("/api/settings", { shippingCents: -1, reserveMinutes: 30 })).status, 400);
-    assert.equal((await owner.put("/api/settings", { shippingCents: 1000, reserveMinutes: 1 })).status, 400);
-    const ok = await owner.put("/api/settings", { shippingCents: 1500, reserveMinutes: 45 });
+    assert.equal((await owner.put("/api/settings", { shippingCents: -1, reserveMinutes: 30, freeShippingFromCents: 35000 })).status, 400);
+    assert.equal((await owner.put("/api/settings", { shippingCents: 1000, reserveMinutes: 1, freeShippingFromCents: 35000 })).status, 400);
+    const ok = await owner.put("/api/settings", { shippingCents: 1500, reserveMinutes: 45, freeShippingFromCents: 0 });
     assert.equal(ok.json.settings.shippingCents, 1500);
     assert.equal((await anon().get("/api/catalog")).json.shippingCents, 1500);
     const p = (await owner.post("/api/products", product({ name: "Com Frete", priceCents: 10000, stock: 5 }))).json.product;
@@ -803,7 +808,40 @@ describe("calçados, perfis, clientes e configurações", () => {
     assert.ok(mins > 43 && mins <= 45, String(mins));
     assert.equal(prefs.at(-1).shippingCents, 1500);
     assert.equal((await owner.get("/api/settings")).json.payments.configured, true);
-    await owner.put("/api/settings", { shippingCents: 0, reserveMinutes: 30 });
+    await owner.put("/api/settings", { shippingCents: 0, reserveMinutes: 30, freeShippingFromCents: 35000 });
+  });
+});
+
+describe("frete grátis e dados de envio", () => {
+  let owner;
+  before(async () => {
+    owner = await as("dono-frete@x.com", "owner");
+  });
+  it("frete grátis só acima do mínimo; guarda CPF e forma de envio", async () => {
+    const cfg = (o) => owner.put("/api/settings", { shippingCents: 2000, reserveMinutes: 30, freeShippingFromCents: 35000, ...o });
+    await cfg({});
+    assert.equal((await anon().get("/api/catalog")).json.freeShippingFromCents, 35000);
+    const eq = (await owner.post("/api/products", product({ name: "Igual 350", priceCents: 35000, stock: 5 }))).json.product;
+    const up = (await owner.post("/api/products", product({ name: "Acima 350", priceCents: 35001, stock: 5 }))).json.product;
+    const c = await as("cli-free@x.com");
+    const a = await c.post("/api/checkout", checkoutBody([{ productId: eq.id, qty: 1 }], { method: "uber_moto" }));
+    const oa = await status(a.json.orderId);
+    assert.equal(oa.shipping_cents, 2000); // exatamente R$350 ainda paga frete
+    assert.equal(oa.total_cents, 37000);
+    assert.equal(oa.shipping_method, "uber_moto");
+    assert.equal(oa.customer_cpf, "52998224725");
+    const b = await c.post("/api/checkout", checkoutBody([{ productId: up.id, qty: 1 }]));
+    const ob = await status(b.json.orderId);
+    assert.equal(ob.shipping_cents, 0);
+    assert.equal(ob.total_cents, 35001);
+    assert.equal(prefs.at(-1).shippingCents, 0);
+    const list = (await owner.get("/api/orders")).json.orders.find((o) => o.id === a.json.orderId);
+    assert.equal(list.customerCpf, "52998224725");
+    assert.equal(list.shippingMethod, "uber_moto");
+    assert.equal((await c.get("/api/me")).json.user.cpf, "52998224725");
+    assert.equal((await c.put("/api/me", { cpf: "123" })).status, 400);
+    assert.equal((await owner.put("/api/settings", { shippingCents: 0, reserveMinutes: 30, freeShippingFromCents: -1 })).status, 400);
+    await cfg({ shippingCents: 0 });
   });
 });
 
