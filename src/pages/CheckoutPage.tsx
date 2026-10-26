@@ -7,7 +7,7 @@ import { useAuth } from "../state/AuthContext";
 import { useCatalog } from "../state/CatalogContext";
 import { useCart } from "../state/CartContext";
 import { STORE } from "../config/store";
-import { SHIPPING_METHODS, methodLabel, shippingFor, type ShippingMethod } from "../lib/shipping";
+import { shippingFor } from "../lib/shipping";
 import { buildOrderMessage, buildWhatsAppUrl, normalizePhone } from "../lib/whatsapp";
 import { AddressFields } from "../components/AddressFields";
 
@@ -20,7 +20,6 @@ export function CheckoutPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [cpf, setCpf] = useState("");
-  const [method, setMethod] = useState<ShippingMethod | "">("");
   const [addr, setAddr] = useState<AddressForm>(emptyAddress);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -70,7 +69,7 @@ export function CheckoutPage() {
 
   const waOk = normalizePhone(STORE.whatsappNumber) !== null;
   const waUrl = () => {
-    const problem = validateDelivery(name, phone, addr) || (method ? "" : "Escolha a forma de envio.");
+    const problem = validateDelivery(name, phone, addr);
     if (problem) {
       setError(problem);
       return null;
@@ -79,13 +78,13 @@ export function CheckoutPage() {
     const address = `${addr.street}, ${addr.number}${addr.complement ? ` (${addr.complement})` : ""} - ${addr.neighborhood} - ${addr.city}/${addr.state} - CEP ${addr.cep}`;
     return buildWhatsAppUrl(
       STORE.whatsappNumber,
-      buildOrderMessage(cart.lines, { name: name.trim(), phone, address, method: methodLabel(method), shippingCents }),
+      buildOrderMessage(cart.lines, { name: name.trim(), phone, address, shippingCents }),
     );
   };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const problem = validateDelivery(name, phone, addr, cpf) || (method ? "" : "Escolha a forma de envio.");
+    const problem = validateDelivery(name, phone, addr, cpf);
     if (problem) return setError(problem);
     setError("");
     setBusy(true);
@@ -95,7 +94,6 @@ export function CheckoutPage() {
         name: name.trim(),
         phone,
         cpf,
-        method,
         shipping: addr,
       });
       cart.clear();
@@ -132,18 +130,6 @@ export function CheckoutPage() {
           <h2 className="form__h">Endereço de entrega</h2>
           <p className="form__hint">Entregamos em todo o Brasil.</p>
           <AddressFields value={addr} onChange={setAddr} disabled={busy} />
-          <fieldset className="methods" disabled={busy}>
-            <legend className="form__h">Forma de envio</legend>
-            {SHIPPING_METHODS.map((m) => (
-              <label key={m.id} className={`method ${method === m.id ? "is-on" : ""}`}>
-                <input type="radio" name="method" value={m.id} checked={method === m.id} onChange={() => setMethod(m.id)} />
-                <span>
-                  <strong>{m.label}</strong>
-                  <small>{m.hint}</small>
-                </span>
-              </label>
-            ))}
-          </fieldset>
           {error && (
             <p className="form__error" role="alert">
               {error}
@@ -167,7 +153,7 @@ export function CheckoutPage() {
               >
                 Comprar pelo WhatsApp
               </button>
-              <p className="form__hint">Abre a conversa com a loja já com o pedido, o envio e o endereço. O pagamento é combinado por lá.</p>
+              <p className="form__hint">Abre a conversa com a loja já com o pedido e o endereço. O pagamento é combinado por lá.</p>
             </>
           )}
         </form>
@@ -186,7 +172,7 @@ export function CheckoutPage() {
             ))}
           </ul>
           <div className="sum">
-            <span>Frete{method ? ` (${methodLabel(method)})` : ""}</span>
+            <span>Frete</span>
             <strong>{shippingCents > 0 ? formatBRL(shippingCents) : "Grátis"}</strong>
           </div>
           {freeShippingFromCents > 0 && shippingCents > 0 && (

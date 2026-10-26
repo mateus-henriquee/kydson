@@ -12,7 +12,6 @@ export interface OrderMessageExtra {
   name: string;
   phone: string;
   address: string;
-  method: string;
   shippingCents: number;
 }
 
@@ -30,7 +29,7 @@ export function buildOrderMessage(lines: PricedLine[], extra?: OrderMessageExtra
       ...rows,
       "",
       `Produtos: ${formatBRL(sub)}`,
-      `Envio: ${extra.method} — ${extra.shippingCents > 0 ? formatBRL(extra.shippingCents) : "frete grátis"}`,
+      `Frete: ${extra.shippingCents > 0 ? formatBRL(extra.shippingCents) : "grátis"}`,
       `Total: ${formatBRL(sub + extra.shippingCents)}`,
       "",
       `Nome: ${extra.name}`,

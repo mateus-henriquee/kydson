@@ -168,8 +168,6 @@ export function parseCpf(v) {
   return d;
 }
 
-export const SHIPPING_METHODS = ["uber_moto", "correios"];
-
 export function parseAddress(a) {
   if (!a || typeof a !== "object") throw bad("Informe o endereço de entrega.");
   const cep = String(a.cep ?? "").replace(/\D/g, "");
@@ -213,7 +211,6 @@ export function parseCheckout(body) {
     name: str(body.name ?? "", "Nome", { min: 2, max: 80 }),
     phone: parsePhone(body.phone),
     cpf: parseCpf(body.cpf),
-    method: SHIPPING_METHODS.includes(body.method) ? body.method : (() => { throw bad("Escolha a forma de envio."); })(),
     shipping: parseAddress(body.shipping),
   };
 }

@@ -1,5 +1,4 @@
 import { maskCpf } from "../lib/address";
-import { methodLabel } from "../lib/shipping";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { formatBRL } from "../lib/money";
 import { api, ApiError } from "./api";
@@ -123,7 +122,7 @@ export function Orders() {
                     {o.paymentId && ` · Pagamento MP ${o.paymentId}`}
                   </p>
                   <p>
-                    Envio: {methodLabel(o.shippingMethod) || "não informado"} · Frete: {o.shippingCents > 0 ? formatBRL(o.shippingCents) : "grátis"}
+                    Frete: {o.shippingCents > 0 ? formatBRL(o.shippingCents) : "grátis"}
                   </p>
                   {o.shipping && (
                     <p>

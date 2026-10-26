@@ -1,4 +1,3 @@
-import { methodLabel } from "../lib/shipping";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, request } from "../lib/http";
 import { formatBRL } from "../lib/money";
@@ -97,12 +96,6 @@ export function OrderPage({ id }: { id: number }) {
               </li>
             ))}
           </ul>
-          {order.shippingMethod && (
-            <div className="sum">
-              <span>Envio</span>
-              <strong>{methodLabel(order.shippingMethod)}</strong>
-            </div>
-          )}
           {!!order.shippingCents && (
             <div className="sum">
               <span>Frete</span>

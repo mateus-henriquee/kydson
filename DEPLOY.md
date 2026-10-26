@@ -57,7 +57,7 @@ Entre em `https://SEU-SITE/painel`. Outros colaboradores: aba **Equipe**.
 - Nunca coloque `SUPABASE_SERVICE_ROLE_KEY`, `MP_ACCESS_TOKEN` ou `WHATSAPP_TOKEN` com prefixo `VITE_`.
 
 ## Envio, CPF e frete grátis
-- No checkout o cliente informa **CPF** e escolhe **Uber Moto** ou **Correios**. Entrega para todo o Brasil.
-- **Frete grátis** acima de R$ 350,00 (só produtos; exatamente R$ 350,00 ainda paga frete). Mude em Painel → Configurações (0,00 desliga). O frete normal é um valor fixo, igual para as duas formas.
-- O CPF e a forma de envio aparecem em Painel → Pedidos. O aviso de WhatsApp da loja não mudou (mesmo modelo `pedido_pago`).
-- Botão **Comprar pelo WhatsApp** (carrinho e checkout): abre a conversa com o pedido, envio e endereço. Não cria pedido no painel nem reserva estoque.
+- No checkout o cliente informa **CPF** e o endereço. Entrega para todo o Brasil. Uber Moto/Correios é logística da loja: o cliente não escolhe.
+- **Frete grátis** acima de R$ 350,00 (só produtos; exatamente R$ 350,00 ainda paga frete). Mude em Painel → Configurações (0,00 desliga). O frete normal é um valor fixo.
+- O CPF aparece em Painel → Pedidos. O aviso de WhatsApp da loja não mudou (mesmo modelo `pedido_pago`).
+- Botão **Comprar pelo WhatsApp** (carrinho e checkout): abre a conversa com o pedido, frete e endereço. Não cria pedido no painel nem reserva estoque.

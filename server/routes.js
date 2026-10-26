@@ -204,7 +204,6 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
             customerEmail: req.user.email,
             customerPhone: input.phone,
             customerCpf: input.cpf,
-            shippingMethod: input.method,
             shipping: input.shipping,
             status: "pending",
             expiresAt,

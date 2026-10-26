@@ -75,7 +75,7 @@ export function Settings() {
         <label>
           Frete fixo (R$)
           <input value={freight} onChange={(e) => setFreight(e.target.value)} inputMode="decimal" disabled={!loaded} />
-          <small className="adm-muted">Cobrado nos pedidos do site (Uber Moto ou Correios). Não há cálculo por CEP/transportadora (exige integração).</small>
+          <small className="adm-muted">Cobrado nos pedidos do site. Não há cálculo por CEP/transportadora (exige integração).</small>
         </label>
         <label>
           Frete grátis acima de (R$)
