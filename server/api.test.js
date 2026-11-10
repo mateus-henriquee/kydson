@@ -1,4 +1,4 @@
-import { DEFAULT_MONTHS, findInactive, parseMonths, purgeInactive } from "./cleanup.js";
+import { DEFAULT_MONTHS, findInactive, findToWarn, parseMonths, purgeInactive } from "./cleanup.js";
 import { TERMS_VERSION, MAX_FAVORITES, createUnsubscribe, emailFooter } from "./legal.js";
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -10,6 +10,7 @@ import { HttpError } from "./auth.js";
 import { createApp } from "./app.js";
 import { buildDashboard, parseRange } from "./dashboard.js";
 import { migrate, openDb } from "./db.js";
+import { createMailer } from "./mail.js";
 import { createMercadoPago } from "./payments.js";
 import { createLocalStorage } from "./providers.js";
 import { createWhatsApp, templateParams } from "./whatsapp.js";
@@ -132,11 +133,22 @@ const approve = (order, over = {}) => {
 };
 const hook = (id) => anon().post("/api/payments/webhook", { type: "payment", data: { id } });
 
+// E-mail falso: guarda o que seria enviado (nada sai de verdade).
+const fakeMail = {
+  enabled: true,
+  sent: [],
+  failFor: null,
+  async send(m) {
+    if (this.failFor === m.to) throw new Error("falha simulada");
+    this.sent.push(m);
+  },
+};
+
 before(async () => {
   db = await openDb({ memory: true });
   await migrate(db);
   uploads = fs.mkdtempSync(path.join(os.tmpdir(), "kyd-up-"));
-  const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", unsubSecret: "segredo-de-teste", cronSecret: "cron-segredo", sweepMs: 0 });
+  const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, mail: fakeMail, siteUrl: "https://loja.test", unsubSecret: "segredo-de-teste", cronSecret: "cron-segredo", sweepMs: 0 });
   server = app.listen(0);
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -1036,15 +1048,24 @@ describe("favoritos (máx. 20)", () => {
   });
 });
 
-describe("exclusão de contas inativas", () => {
+describe("exclusão de contas inativas (com aviso por e-mail)", () => {
   const ago = (months) => `now() - interval '${months} months'`;
   const mk = async (email, role = "customer") => {
     const c = await as(email, role);
     const id = (await db.query("select id from profiles where email = $1", [email])).rows[0].id;
     return { c, id };
   };
-  const seen = (id, months) => db.query(`update profiles set last_seen_at = ${ago(months)} where id = $1`, [id]);
+  const seen = (id, months) => db.query(`update profiles set last_seen_at = ${ago(months)}, deletion_warned_at = null where id = $1`, [id]);
+  const warnedDaysAgo = (id, days) => db.query(`update profiles set deletion_warned_at = now() - interval '${days} days' where id = $1`, [id]);
+  const warnedAt = async (id) => (await db.query("select deletion_warned_at from profiles where id = $1", [id])).rows[0]?.deletion_warned_at ?? null;
   const exists = async (id) => (await db.query("select 1 from profiles where id = $1", [id])).rows.length === 1;
+  const unsub = createUnsubscribe("segredo-de-teste");
+  const run = (o = {}) => purgeInactive({ db, provider, mail: fakeMail, unsub, siteUrl: "https://loja.test", months: 24, apply: true, pauseMs: 0, ...o });
+  const sentTo = (email) => fakeMail.sent.filter((m) => m.to === email);
+  beforeEach(() => {
+    fakeMail.sent.length = 0;
+    fakeMail.failFor = null;
+  });
 
   it("prazo: 24 meses, igual ao da Política de Privacidade; menos de 6 ou lixo é recusado", () => {
     assert.equal(DEFAULT_MONTHS, 24);
@@ -1055,35 +1076,153 @@ describe("exclusão de contas inativas", () => {
     for (const bad of ["5", "0", "-1", "abc", "1.5", "121"]) assert.throws(() => parseMonths(bad), /Prazo inválido/);
   });
 
-  it("só exclui cliente ativo, inativo há mais que o prazo e sem pedido pendente", async () => {
-    const old = await mk("inat-velho@x.com");
-    const recent = await mk("inat-recente@x.com");
-    const owner = await mk("inat-dono@x.com", "owner");
-    const staff = await mk("inat-staff@x.com", "staff");
-    const stock = await mk("inat-estoque@x.com", "stock");
-    const banned = await mk("inat-banido@x.com");
-    const pend = await mk("inat-pendente@x.com");
-    for (const u of [old, owner, staff, stock, banned, pend]) await seen(u.id, 30);
-    await seen(recent.id, 23);
+  it("avisa 30 dias antes do prazo: só cliente ativo e sem pedido pendente", async () => {
+    const soon = await mk("av-25d@x.com");
+    const edge = await mk("av-35d@x.com");
+    const owner = await mk("av-dono@x.com", "owner");
+    const staff = await mk("av-staff@x.com", "staff");
+    const banned = await mk("av-banido@x.com");
+    const pend = await mk("av-pendente@x.com");
+    await db.query(`update profiles set last_seen_at = now() - interval '24 months' + interval '25 days', deletion_warned_at = null where id = $1`, [soon.id]); // faltam 25 dias
+    await db.query(`update profiles set last_seen_at = now() - interval '24 months' + interval '35 days', deletion_warned_at = null where id = $1`, [edge.id]); // faltam 35 dias: ainda cedo
+    for (const u of [owner, staff, banned, pend]) await seen(u.id, 30);
+    await db.query("update profiles set active = false where id = $1", [banned.id]);
+    await db.query("insert into orders (source, customer_id, status, total_cents) values ('site', $1, 'pending', 1000)", [pend.id]);
+
+    const ids = (await findToWarn(db, { months: 24 })).map((x) => x.id);
+    assert.ok(ids.includes(soon.id));
+    for (const u of [edge, owner, staff, banned, pend]) assert.ok(!ids.includes(u.id));
+
+    // simulação não envia nada
+    const dry = await run({ apply: false });
+    assert.equal(dry.warned, 0);
+    assert.equal(fakeMail.sent.length, 0);
+
+    const r = await run();
+    assert.equal(r.failed, 0);
+    assert.equal(sentTo("av-25d@x.com").length, 1);
+    assert.ok(await warnedAt(soon.id));
+    for (const e of ["av-35d@x.com", "av-dono@x.com", "av-staff@x.com", "av-banido@x.com", "av-pendente@x.com"]) assert.equal(sentTo(e).length, 0, e);
+    assert.ok(await exists(soon.id), "avisar não exclui");
+  });
+
+  it("o e-mail traz data, link para entrar, rodapé de descadastro e escapa o nome", async () => {
+    const u = await mk("av-conteudo@x.com");
+    await db.query("update profiles set name = $2 where id = $1", [u.id, '<b>Ana</b> "Maria" Souza']);
+    await seen(u.id, 30);
+    await run();
+    const m = sentTo("av-conteudo@x.com")[0];
+    assert.ok(m, "deveria ter enviado");
+    assert.match(m.subject, /30 dias/);
+    const day = new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeZone: "America/Sao_Paulo" }).format(new Date(Date.now() + 30 * 86400_000));
+    assert.ok(m.text.includes(day) && m.html.includes(day), "data da exclusão");
+    assert.ok(m.text.includes("https://loja.test/entrar") && m.html.includes("https://loja.test/entrar"));
+    assert.ok(m.text.includes("https://loja.test/descadastrar") && m.html.includes("/descadastrar"));
+    assert.ok(m.headers["List-Unsubscribe"]);
+    assert.ok(!m.html.includes("<b>Ana"), "HTML do nome precisa ser escapado");
+    assert.ok(m.html.includes("&lt;b&gt;") || !m.html.includes("<b>"));
+    assert.ok(m.text.startsWith("Olá, "));
+  });
+
+  it("não envia aviso duas vezes na mesma inatividade", async () => {
+    const u = await mk("av-uma-vez@x.com");
+    await seen(u.id, 30);
+    await run();
+    await run();
+    await run();
+    assert.equal(sentTo("av-uma-vez@x.com").length, 1);
+  });
+
+  it("duas execuções ao mesmo tempo não duplicam o aviso", async () => {
+    const u = await mk("av-paralelo@x.com");
+    await seen(u.id, 30);
+    await Promise.all([run(), run(), run()]);
+    assert.equal(sentTo("av-paralelo@x.com").length, 1);
+  });
+
+  it("só exclui quem foi avisado há 30 dias ou mais (e o prazo venceu)", async () => {
+    const never = await mk("ex-nunca@x.com");
+    const fresh = await mk("ex-10d@x.com");
+    const ok = await mk("ex-31d@x.com");
+    const early = await mk("ex-cedo@x.com");
+    const recent = await mk("ex-recente@x.com");
+    const owner = await mk("ex-dono@x.com", "owner");
+    const banned = await mk("ex-banido@x.com");
+    const pend = await mk("ex-pendente@x.com");
+    for (const u of [never, fresh, ok, owner, banned, pend]) await seen(u.id, 30);
+    await seen(early.id, 23); // avisado, mas o prazo de 24 meses ainda não venceu
+    await seen(recent.id, 20);
+    await warnedDaysAgo(fresh.id, 10);
+    await warnedDaysAgo(ok.id, 31);
+    await warnedDaysAgo(early.id, 40);
+    for (const u of [owner, banned, pend]) await warnedDaysAgo(u.id, 40);
     await db.query("update profiles set active = false where id = $1", [banned.id]);
     await db.query("insert into orders (source, customer_id, status, total_cents) values ('site', $1, 'pending', 1000)", [pend.id]);
 
     const ids = (await findInactive(db, { months: 24 })).map((x) => x.id);
-    assert.ok(ids.includes(old.id));
-    for (const u of [recent, owner, staff, stock, banned, pend]) assert.ok(!ids.includes(u.id));
+    assert.ok(ids.includes(ok.id));
+    for (const u of [never, fresh, early, recent, owner, banned, pend]) assert.ok(!ids.includes(u.id), "não pode listar " + u.id);
 
-    // simulação não apaga nada
-    const dry = await purgeInactive({ db, provider, months: 24, apply: false });
+    const dry = await run({ apply: false });
     assert.equal(dry.deleted, 0);
-    assert.ok(await exists(old.id));
+    assert.ok(await exists(ok.id));
 
-    const r = await purgeInactive({ db, provider, months: 24, apply: true });
+    const r = await run();
     assert.equal(r.failed, 0);
-    assert.ok(r.deleted >= 1);
-    assert.ok(!(await exists(old.id)));
-    for (const u of [recent, owner, staff, stock, banned, pend]) assert.ok(await exists(u.id), "não pode excluir " + u.id);
-    assert.equal((await old.c.get("/api/me")).status, 401); // a conta de login também saiu
+    assert.ok(!(await exists(ok.id)));
+    for (const u of [never, fresh, early, recent, owner, banned, pend]) assert.ok(await exists(u.id), "não pode excluir " + u.id);
+    assert.equal((await ok.c.get("/api/me")).status, 401); // a conta de login também saiu
     assert.equal((await recent.c.get("/api/me")).status, 200);
+    assert.ok(await warnedAt(never.id), "quem nunca foi avisado recebe o aviso, não a exclusão");
+    assert.equal(sentTo("ex-nunca@x.com").length, 1);
+  });
+
+  it("voltar ao site depois do aviso cancela a exclusão e zera o aviso", async () => {
+    const u = await mk("av-volta@x.com");
+    await seen(u.id, 30);
+    await warnedDaysAgo(u.id, 40);
+    assert.equal((await findInactive(db, { months: 24 })).some((x) => x.id === u.id), true);
+    assert.equal((await u.c.get("/api/me")).status, 200); // entrou de novo
+    assert.equal(await warnedAt(u.id), null);
+    assert.equal((await findInactive(db, { months: 24 })).some((x) => x.id === u.id), false);
+    await run();
+    assert.ok(await exists(u.id));
+    assert.equal(sentTo("av-volta@x.com").length, 0);
+  });
+
+  it("aviso antigo (de outra inatividade) não vale: avisa de novo e não exclui", async () => {
+    const u = await mk("av-antigo@x.com");
+    await seen(u.id, 30);
+    await db.query("update profiles set deletion_warned_at = last_seen_at - interval '60 days' where id = $1", [u.id]);
+    assert.equal((await findInactive(db, { months: 24 })).some((x) => x.id === u.id), false);
+    await run();
+    assert.ok(await exists(u.id));
+    assert.equal(sentTo("av-antigo@x.com").length, 1);
+  });
+
+  it("se o e-mail falhar, o aviso é desfeito e nada é excluído", async () => {
+    const u = await mk("av-falha@x.com");
+    const other = await mk("av-ok@x.com");
+    await seen(u.id, 30);
+    await seen(other.id, 30);
+    fakeMail.failFor = "av-falha@x.com";
+    const r = await run();
+    assert.equal(r.failed, 1);
+    assert.equal(await warnedAt(u.id), null, "sem aviso entregue, a contagem de 30 dias não pode começar");
+    assert.ok(await exists(u.id));
+    assert.equal(sentTo("av-ok@x.com").length, 1, "a falha de um não impede os outros");
+    fakeMail.failFor = null;
+    await run();
+    assert.equal(sentTo("av-falha@x.com").length, 1, "tenta de novo na próxima execução");
+  });
+
+  it("sem e-mail configurado nada é feito: nem aviso nem exclusão", async () => {
+    const u = await mk("av-sem-mail@x.com");
+    await seen(u.id, 30);
+    await warnedDaysAgo(u.id, 40);
+    await assert.rejects(() => run({ mail: { enabled: false } }), /E-mail não configurado/);
+    await assert.rejects(() => run({ mail: undefined }), /E-mail não configurado/);
+    assert.ok(await exists(u.id));
   });
 
   it("mantém os pedidos; favoritos e aceites saem com a conta", async () => {
@@ -1096,7 +1235,8 @@ describe("exclusão de contas inativas", () => {
     await u.c.put(`/api/favorites/${prod.id}`);
     assert.ok((await db.query("select 1 from consents where user_id = $1", [u.id])).rows.length >= 1);
     await seen(u.id, 25);
-    await purgeInactive({ db, provider, months: 24, apply: true });
+    await warnedDaysAgo(u.id, 35);
+    await run();
     assert.ok(!(await exists(u.id)));
     const o = (await db.query("select customer_id, customer_name, customer_cpf, status from orders where customer_email = 'inat-pedidos@x.com'")).rows[0];
     assert.equal(o.status, "paid");
@@ -1117,35 +1257,72 @@ describe("exclusão de contas inativas", () => {
     const b = (await db.query("select extract(epoch from now() - last_seen_at) as s from profiles where id = $1", [u.id])).rows[0].s;
     assert.ok(Number(b) > 3600, "não deveria atualizar de novo no mesmo dia");
     await seen(u.id, 40);
-    await u.c.get("/api/me"); // quem volta depois de muito tempo sai da lista
+    await warnedDaysAgo(u.id, 40);
+    await u.c.get("/api/me"); // quem volta depois de muito tempo sai das listas
     assert.ok(!(await findInactive(db, { months: 24 })).some((x) => x.id === u.id));
+    assert.ok(!(await findToWarn(db, { months: 24 })).some((x) => x.id === u.id));
   });
 
-  it("rota do cron exige o segredo, aceita GET e exclui", async () => {
-    const u = await mk("inat-cron@x.com");
-    await seen(u.id, 30);
+  it("rota do cron exige o segredo, aceita GET, avisa e exclui", async () => {
+    const del = await mk("inat-cron@x.com");
+    const warn = await mk("inat-cron-aviso@x.com");
+    await seen(del.id, 30);
+    await warnedDaysAgo(del.id, 35);
+    await seen(warn.id, 30);
     assert.equal((await anon().get("/api/cron/cleanup")).status, 401);
-    assert.equal((await anon().get("/api/cron/cleanup", {})).status, 401);
     const bad = await fetch(base + "/api/cron/cleanup", { headers: { Authorization: "Bearer errado" } });
     assert.equal(bad.status, 401);
-    assert.ok(await exists(u.id));
+    assert.ok(await exists(del.id));
     const ok = await fetch(base + "/api/cron/cleanup", { headers: { Authorization: "Bearer cron-segredo" } });
     assert.equal(ok.status, 200);
     const j = await ok.json();
     assert.equal(j.months, 24);
-    assert.ok(j.deleted >= 1);
-    assert.ok(!(await exists(u.id)));
+    assert.ok(j.deleted >= 1 && j.warned >= 1);
+    assert.ok(!(await exists(del.id)));
+    assert.ok(await exists(warn.id));
+    assert.equal(sentTo("inat-cron-aviso@x.com").length, 1);
   });
 
-  it("sem CRON_SECRET a rota nem existe", async () => {
-    const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", sweepMs: 0 });
-    const srv = app.listen(0);
+  it("sem CRON_SECRET a rota nem existe; sem e-mail ela responde 503 e não faz nada", async () => {
+    const mk2 = (extra) => {
+      const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", sweepMs: 0, ...extra });
+      return app.listen(0);
+    };
+    let srv = mk2({});
     try {
-      const r = await fetch(`http://127.0.0.1:${srv.address().port}/api/cron/cleanup`, { headers: { Authorization: "Bearer " } });
-      assert.equal(r.status, 404);
+      assert.equal((await fetch(`http://127.0.0.1:${srv.address().port}/api/cron/cleanup`, { headers: { Authorization: "Bearer " } })).status, 404);
+    } finally {
+      srv.close();
+    }
+    const u = await mk("inat-503@x.com");
+    await seen(u.id, 30);
+    await warnedDaysAgo(u.id, 40);
+    srv = mk2({ unsubSecret: "s", cronSecret: "cron-segredo", mail: { enabled: false } });
+    try {
+      const r = await fetch(`http://127.0.0.1:${srv.address().port}/api/cron/cleanup`, { headers: { Authorization: "Bearer cron-segredo" } });
+      assert.equal(r.status, 503);
+      assert.ok(await exists(u.id));
     } finally {
       srv.close();
     }
   });
 
+  it("envio real (Resend): monta a requisição certa e não vaza o e-mail no erro", async () => {
+    let seenReq;
+    const ok = createMailer({ apiKey: "re_chave", from: "KYDSON <avisos@loja.test>", fetchImpl: async (url, init) => ((seenReq = { url, init }), { ok: true, status: 200 }) });
+    assert.equal(ok.enabled, true);
+    await ok.send({ to: "ana@x.com", subject: "Oi", html: "<p>a</p>", text: "a", headers: { "List-Unsubscribe": "<https://loja.test/x>" } });
+    assert.equal(seenReq.url, "https://api.resend.com/emails");
+    assert.equal(seenReq.init.headers.Authorization, "Bearer re_chave");
+    const body = JSON.parse(seenReq.init.body);
+    assert.deepEqual(body.to, ["ana@x.com"]);
+    assert.equal(body.from, "KYDSON <avisos@loja.test>");
+    assert.equal(body.headers["List-Unsubscribe"], "<https://loja.test/x>");
+    const bad = createMailer({ apiKey: "k", from: "f", fetchImpl: async () => ({ ok: false, status: 422 }) });
+    await assert.rejects(() => bad.send({ to: "ana@x.com", subject: "s", html: "h", text: "t" }), (e) => /422/.test(e.message) && !e.message.includes("ana@x.com"));
+    for (const m of [createMailer({}), createMailer({ apiKey: "k" }), createMailer({ from: "f" })]) {
+      assert.equal(m.enabled, false);
+      await assert.rejects(() => m.send({ to: "a@b.c" }), /não configurado/);
+    }
+  });
 });

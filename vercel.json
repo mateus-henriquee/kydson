@@ -78,7 +78,7 @@
   "crons": [
     {
       "path": "/api/cron/cleanup",
-      "schedule": "17 6 * * 1"
+      "schedule": "17 6 * * *"
     }
   ]
 }

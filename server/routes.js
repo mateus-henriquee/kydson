@@ -66,7 +66,7 @@ const profileOut = (p, consentVersion = null) => ({
 });
 const teamOut = (p) => ({ id: p.id, name: p.name, email: p.email, role: p.role, active: p.active, createdAt: iso(p.created_at) });
 
-export function createApi({ db, provider, storage, mp, wa, siteUrl, unsubSecret, cronSecret, sweepMs = 20_000 }) {
+export function createApi({ db, provider, storage, mp, wa, mail, siteUrl, unsubSecret, cronSecret, sweepMs = 20_000 }) {
   const router = express.Router();
   const unsub = createUnsubscribe(unsubSecret);
   const auth = createAuth({ db, provider });
@@ -157,15 +157,17 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, unsubSecret,
     }),
   );
 
-  // Varredura diária/semanal (Vercel Cron). Só existe se CRON_SECRET estiver definido; a Vercel envia "Authorization: Bearer <CRON_SECRET>".
+  // Varredura diária (Vercel Cron): avisa por e-mail 30 dias antes e exclui quem já foi avisado. Só existe se CRON_SECRET estiver definido; a Vercel envia "Authorization: Bearer <CRON_SECRET>".
   router.all(
     "/cron/cleanup",
     wrap(async (req, res) => {
       if (!cronSecret) throw new HttpError(404, "Rota não encontrada.");
       if (!secretOk(req.headers.authorization, cronSecret)) throw new HttpError(401, "Não autorizado.");
-      const r = await purgeInactive({ db, provider, months: DEFAULT_MONTHS, apply: true });
-      console.log(`Contas inativas: ${r.deleted} excluídas de ${r.found} (prazo ${r.months} meses, falhas ${r.failed}).`);
-      res.json({ months: r.months, found: r.found, deleted: r.deleted, failed: r.failed });
+      // Sem e-mail configurado não dá para avisar; então nada é feito (nem exclusão).
+      if (!mail?.enabled) throw new HttpError(503, "E-mail não configurado (RESEND_API_KEY e MAIL_FROM). Nenhuma conta foi avisada ou excluída.");
+      const r = await purgeInactive({ db, provider, mail, unsub, siteUrl: baseUrl(req), months: DEFAULT_MONTHS, apply: true });
+      console.log(`Contas inativas: ${r.warned} avisadas, ${r.deleted} excluídas (prazo ${r.months} meses, falhas ${r.failed}).`);
+      res.json({ months: r.months, toWarn: r.toWarn, warned: r.warned, found: r.found, deleted: r.deleted, failed: r.failed });
     }),
   );
 

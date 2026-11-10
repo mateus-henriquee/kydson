@@ -5,7 +5,7 @@ Guarde cada chave em um bloco de notas; você vai colá-las na Vercel no passo 4
 
 ## 1. Supabase (banco, login e fotos)
 1. Crie conta em supabase.com → **New project** (região São Paulo). Anote a senha do banco.
-2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois `0002_calcados_perfis_config.sql`, `0003_modelo.sql`, `0004_cpf_envio.sql` e `0005_privacidade_favoritos.sql`, um de cada vez → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
+2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois `0002_calcados_perfis_config.sql`, `0003_modelo.sql`, `0004_cpf_envio.sql`, `0005_privacidade_favoritos.sql`, `0006_ultimo_acesso.sql` e `0007_aviso_exclusao.sql`, um de cada vez → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
 3. **Project Settings → API**: copie `Project URL` (→ `SUPABASE_URL` e `VITE_SUPABASE_URL`), `anon public` (→ `VITE_SUPABASE_ANON_KEY`) e `service_role` (→ `SUPABASE_SERVICE_ROLE_KEY`, **secreta**).
 4. **Project Settings → Database → Connection string → Transaction pooler** (porta 6543): copie a URL, troque `[YOUR-PASSWORD]` pela senha (→ `DATABASE_URL`).
 5. **Authentication → Providers → Email**: deixe ligado. Recomendado: manter "Confirm email" ligado.
@@ -71,7 +71,7 @@ Entre em `https://SEU-SITE/painel`. Outros colaboradores: aba **Equipe**.
 - O aceite (versão, data/hora, origem) fica na tabela `consents`. Sem aceite válido o servidor recusa o checkout.
 - Contas: checkbox "Tenho 18 anos ou mais" (declaração; o site não consegue verificar a idade). Menores só com consentimento do responsável, combinado com a loja.
 - Cookies: o banner tem Aceitar e Recusar com o mesmo destaque. **Hoje não existe nenhum rastreador no site.** Se um dia adicionar análise/pixel, carregue **somente** dentro de `whenAnalyticsAllowed(() => { ... })` (`src/lib/consent.ts`), e atualize a Política de Privacidade.
-- E-mails: o servidor não envia e-mails hoje (só o Supabase envia confirmação e senha). Se um dia enviar, use `emailFooter()` de `server/legal.js`: ele coloca o link de descadastro assinado e os cabeçalhos List-Unsubscribe, e recusa enviar se o segredo não existir. Defina `UNSUBSCRIBE_SECRET` na Vercel (um texto aleatório longo).
+- E-mails: o Supabase envia confirmação e senha; o servidor envia só o aviso de exclusão por inatividade (veja abaixo, via Resend). Para qualquer outro e-mail que enviar, use `emailFooter()` de `server/legal.js`: ele coloca o link de descadastro assinado e os cabeçalhos List-Unsubscribe, e recusa enviar se o segredo não existir. Defina `UNSUBSCRIBE_SECRET` na Vercel (um texto aleatório longo).
 - Licenças de código, fontes e imagens: veja `LICENSES.md`.
 
 ## Exclusão automática de contas inativas
@@ -79,6 +79,9 @@ Entre em `https://SEU-SITE/painel`. Outros colaboradores: aba **Equipe**.
 - "Acesso" = a pessoa entrou no site logada (registrado em `profiles.last_seen_at`, no máximo 1 vez por dia). Quem já tinha conta começa com a data da migração `0006`, então **nada é excluído antes de 24 meses depois do deploy**.
 - Só exclui **clientes**. Nunca dono, atendimento, estoque, contas desativadas pela loja, nem quem tem pedido aguardando pagamento. No máximo 50 por execução.
 - **Os pedidos ficam** (obrigação legal): só deixam de apontar para a conta. Favoritos e registros de aceite saem junto.
-- **Automático:** `vercel.json` agenda toda segunda-feira (06:17 UTC). Para ativar, crie `CRON_SECRET` na Vercel (texto aleatório longo). Sem ele, a rota nem existe. Plano Hobby da Vercel permite no máximo 1 execução por dia: serve.
-- **Manual:** `npm run cleanup` só mostra quantas contas seriam excluídas (não apaga). `npm run cleanup -- --apply` exclui.
-- **Limite honesto:** o site não envia e-mail de aviso antes de excluir (ainda não existe envio de e-mails). Por isso o prazo é longo e a política avisa. Se quiser, o próximo passo é enviar um aviso 30 dias antes.
+- **Aviso por e-mail 30 dias antes:** quando a conta chega a 23 meses sem acesso, o site envia um e-mail dizendo a data da exclusão e como evitar (entrar no site). A exclusão só acontece se **(a)** passaram 24 meses sem acesso **e (b)** o aviso foi enviado há 30 dias ou mais. Se a pessoa entrar de novo, o aviso é zerado e a contagem recomeça. Se o e-mail falhar, o aviso é desfeito e tenta de novo no dia seguinte. **Sem e-mail configurado, nenhuma conta é excluída.**
+- **Configurar o envio (Resend, plano grátis serve):** 1) crie conta em resend.com; 2) **Domains** → adicione o domínio da loja e crie no seu provedor de domínio os registros DNS que ele mostrar (SPF e DKIM); espere ficar "Verified"; 3) **API Keys** → crie uma chave; 4) na Vercel: `RESEND_API_KEY` = a chave e `MAIL_FROM` = `KYDSON <avisos@seudominio.com.br>` (o domínio precisa ser o verificado); 5) defina também `SITE_URL` (endereço do site) para os links do e-mail.
+- **Rode a migração `0007` ANTES de publicar esta versão** (o login passa a usar a coluna nova; sem ela o site dá erro).
+- **Automático:** `vercel.json` agenda **todo dia** (06:17 UTC). Para ativar, crie `CRON_SECRET` na Vercel (texto aleatório longo). Sem ele, a rota nem existe; sem Resend, ela responde 503 e não faz nada. No máximo 25 avisos e 50 exclusões por execução. Plano Hobby da Vercel permite 1 execução por dia: serve.
+- **Manual:** `npm run cleanup` só mostra quantas contas seriam avisadas e excluídas (não faz nada). `npm run cleanup -- --apply` envia os avisos e exclui (precisa de `RESEND_API_KEY`, `MAIL_FROM` e `SITE_URL` no `.env`).
+- **Limites honestos:** testado só com e-mail simulado, nunca com o Resend de verdade. O e-mail pode cair em spam se o domínio não estiver verificado. Cliente que mudou de e-mail sem atualizar a conta não recebe o aviso.

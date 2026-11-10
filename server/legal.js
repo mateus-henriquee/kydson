@@ -67,13 +67,17 @@ export function createUnsubscribe(secret) {
  * Rodapé obrigatório de todo e-mail que o servidor enviar: link de descadastro + cabeçalhos
  * List-Unsubscribe (clique único). Hoje o servidor não envia e-mails; use isto em qualquer envio futuro.
  */
-export function emailFooter(unsub, userId, siteUrl) {
+export function emailFooter(unsub, userId, siteUrl, { account = false } = {}) {
   if (!unsub.enabled) throw new Error("UNSUBSCRIBE_SECRET não configurado: não é permitido enviar e-mail sem link de descadastro.");
   const url = `${siteUrl.replace(/\/+$/, "")}/descadastrar?t=${unsub.token(userId)}`;
   return {
     url,
-    html: `<p style="font-size:12px;color:#555">Não quer mais receber e-mails da KYDSON? <a href="${url}">Cancelar inscrição</a>.</p>`,
-    text: `Não quer mais receber e-mails da KYDSON? Cancele a inscrição: ${url}`,
+    html: account
+      ? `<p style="font-size:12px;color:#555">Este aviso é sobre a sua conta e é enviado mesmo sem inscrição em novidades. Para não receber e-mails de novidades da KYDSON: <a href="${url}">cancelar inscrição</a>.</p>`
+      : `<p style="font-size:12px;color:#555">Não quer mais receber e-mails da KYDSON? <a href="${url}">Cancelar inscrição</a>.</p>`,
+    text: account
+      ? `Este aviso é sobre a sua conta e é enviado mesmo sem inscrição em novidades. Para não receber e-mails de novidades da KYDSON, cancele a inscrição: ${url}`
+      : `Não quer mais receber e-mails da KYDSON? Cancele a inscrição: ${url}`,
     headers: { "List-Unsubscribe": `<${url}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
   };
 }

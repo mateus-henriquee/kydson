@@ -2,6 +2,7 @@ import { createApp } from "./app.js";
 import { openDb } from "./db.js";
 import { createMercadoPago } from "./payments.js";
 import { createSupabaseProvider, createSupabaseStorage } from "./providers.js";
+import { createMailer } from "./mail.js";
 import { createWhatsApp } from "./whatsapp.js";
 
 const REQUIRED = ["DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
@@ -22,7 +23,8 @@ export async function createAppFromEnv(env = process.env) {
     template: env.WHATSAPP_TEMPLATE,
     lang: env.WHATSAPP_TEMPLATE_LANG || "pt_BR",
   });
+  const mail = createMailer({ apiKey: env.RESEND_API_KEY, from: env.MAIL_FROM });
   const siteUrl = env.SITE_URL || (env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined);
 
-  return { app: createApp({ db, provider, storage, mp, wa, siteUrl, unsubSecret: env.UNSUBSCRIBE_SECRET || env.SUPABASE_SERVICE_ROLE_KEY, cronSecret: env.CRON_SECRET }), db, mp, wa };
+  return { app: createApp({ db, provider, storage, mp, wa, mail, siteUrl, unsubSecret: env.UNSUBSCRIBE_SECRET || env.SUPABASE_SERVICE_ROLE_KEY, cronSecret: env.CRON_SECRET }), db, mp, wa };
 }

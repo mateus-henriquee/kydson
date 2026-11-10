@@ -117,6 +117,9 @@ export function PrivacyPage() {
           <strong>WhatsApp (Meta):</strong> usado para avisar a loja de um pedido pago (nome, telefone, valor, produtos e endereço) e quando você escolhe falar com a loja pelo WhatsApp.
         </li>
         <li>
+          <strong>Resend:</strong> envia os e-mails de aviso sobre a sua conta (por exemplo, o aviso antes de uma exclusão por inatividade).
+        </li>
+        <li>
           <strong>Transportadora ou entregador</strong> (Correios, Uber Moto ou outro): recebem nome, telefone e endereço para entregar o pedido.
         </li>
       </ul>
@@ -146,7 +149,7 @@ export function PrivacyPage() {
       <h2>6. Por quanto tempo guardamos</h2>
       <ul>
         <li>
-          Dados da conta e favoritos: enquanto a conta existir. Contas de clientes sem nenhum acesso por {INACTIVITY_MONTHS} meses são excluídas automaticamente. Para evitar, basta entrar no site de vez em quando. Você também pode pedir a exclusão antes.
+          Dados da conta e favoritos: enquanto a conta existir. Contas de clientes sem nenhum acesso por {INACTIVITY_MONTHS} meses são excluídas automaticamente. Enviamos um aviso para o e-mail da conta 30 dias antes; para manter a conta, basta entrar no site nesse prazo. Você também pode pedir a exclusão antes.
         </li>
         <li>Pedidos e dados de entrega: mesmo depois de a conta ser excluída, pelo prazo exigido pela legislação fiscal e para a defesa de direitos em eventual disputa.</li>
         <li>Registro de aceite: enquanto a conta existir, como prova do consentimento.</li>
