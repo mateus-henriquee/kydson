@@ -2,6 +2,30 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { ApiError, request, setUnauthorizedHandler } from "../lib/http";
 import { authConfigured, getSupabase } from "../lib/supabase";
 import type { AddressForm } from "../lib/address";
+import { TERMS_VERSION } from "../config/legal";
+
+const PENDING_KEY = "kydson:pending-consent";
+interface Pending {
+  email: string;
+  version: string;
+  at: string;
+  marketing: boolean;
+}
+const readPending = (): Pending | null => {
+  try {
+    return JSON.parse(localStorage.getItem(PENDING_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+};
+let consentInFlight = false; // evita registrar o aceite duas vezes quando o login dispara duas leituras seguidas
+const clearPending = () => {
+  try {
+    localStorage.removeItem(PENDING_KEY);
+  } catch {
+    /* ignora */
+  }
+};
 
 export type Role = "customer" | "staff" | "owner";
 
@@ -13,6 +37,9 @@ export interface Profile {
   cpf?: string;
   address: AddressForm | null;
   role: Role;
+  marketing?: boolean;
+  /** Última versão dos termos aceita (null = nunca aceitou). */
+  consentVersion?: string | null;
 }
 
 interface AuthCtx {
@@ -23,11 +50,14 @@ interface AuthCtx {
   /** true quando a pessoa abriu o link de "esqueci a senha" e precisa definir uma nova. */
   recovery: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (name: string, email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
+  signUp: (name: string, email: string, password: string, opts: { marketing: boolean }) => Promise<{ needsConfirmation: boolean }>;
+  /** true quando a pessoa já aceitou a versão atual dos termos. */
+  consentOk: boolean;
+  acceptTerms: (opts: { source: "cadastro" | "checkout" | "conta"; marketing?: boolean }) => Promise<void>;
   signOut: () => Promise<void>;
   sendReset: (email: string) => Promise<void>;
   setNewPassword: (password: string) => Promise<void>;
-  saveProfile: (patch: Partial<{ name: string; phone: string; cpf: string; address: AddressForm | null }>) => Promise<void>;
+  saveProfile: (patch: Partial<{ name: string; phone: string; cpf: string; marketing: boolean; address: AddressForm | null }>) => Promise<void>;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
@@ -51,7 +81,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadProfile = useCallback(async () => {
     try {
-      const r = await request<{ user: Profile }>("GET", "/api/me");
+      let r = await request<{ user: Profile }>("GET", "/api/me");
+      // Aceite feito no cadastro, antes de a conta ser confirmada por e-mail: registra agora (só para o mesmo e-mail).
+      const pend = readPending();
+      if (pend && r.user.consentVersion !== TERMS_VERSION && pend.version === TERMS_VERSION && pend.email === r.user.email.toLowerCase() && !consentInFlight) {
+        consentInFlight = true;
+        try {
+          r = await request<{ user: Profile }>("POST", "/api/me/consent", {
+            version: pend.version,
+            terms: true,
+            adult: true,
+            marketing: pend.marketing,
+            source: "cadastro",
+            declaredAt: pend.at,
+          });
+          clearPending();
+        } catch {
+          /* tenta de novo no próximo login; o checkout também pede o aceite */
+        } finally {
+          consentInFlight = false;
+        }
+      } else if (pend && r.user.consentVersion === TERMS_VERSION) clearPending();
       setUser(r.user);
       setStatus("user");
     } catch (e) {
@@ -111,12 +161,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw friendly(error);
         await loadProfile();
       },
-      async signUp(name, email, password) {
+      async signUp(name, email, password, opts) {
         const sb = await getSupabase();
         const { data, error } = await sb.auth.signUp({ email: email.trim(), password, options: { data: { full_name: name.trim() } } });
         if (error) throw friendly(error);
         // E-mail já cadastrado: o Supabase devolve um usuário sem identidades, sem erro (para não expor quem tem conta).
         if (data.user && data.user.identities?.length === 0) throw new Error("Este e-mail já tem conta. Entre com a sua senha.");
+        try {
+          const pend: Pending = { email: email.trim().toLowerCase(), version: TERMS_VERSION, at: new Date().toISOString(), marketing: opts.marketing };
+          localStorage.setItem(PENDING_KEY, JSON.stringify(pend));
+        } catch {
+          /* sem armazenamento: o checkout pedirá o aceite */
+        }
         if (data.session) {
           await loadProfile();
           return { needsConfirmation: false };
@@ -142,6 +198,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw friendly(error);
         setRecovery(false);
         await loadProfile();
+      },
+      consentOk: user?.consentVersion === TERMS_VERSION,
+      async acceptTerms({ source, marketing }) {
+        const r = await request<{ user: Profile }>("POST", "/api/me/consent", {
+          version: TERMS_VERSION,
+          terms: true,
+          adult: true,
+          marketing,
+          source,
+          declaredAt: new Date().toISOString(),
+        });
+        setUser(r.user);
       },
       async saveProfile(patch) {
         const r = await request<{ user: Profile }>("PUT", "/api/me", patch);

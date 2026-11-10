@@ -192,6 +192,10 @@ export function parseProfile(body) {
   if (body.phone !== undefined) out.phone = body.phone === "" ? "" : parsePhone(body.phone);
   if (body.address !== undefined) out.address = body.address === null ? null : parseAddress(body.address);
   if (body.cpf !== undefined) out.cpf = body.cpf === "" ? "" : parseCpf(body.cpf);
+  if (body.marketing !== undefined) {
+    if (typeof body.marketing !== "boolean") throw bad("Preferência inválida.");
+    out.marketing = body.marketing;
+  }
   return out;
 }
 

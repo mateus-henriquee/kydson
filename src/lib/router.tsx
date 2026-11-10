@@ -9,6 +9,11 @@ export type Route =
   | { name: "account" }
   | { name: "checkout" }
   | { name: "order"; id: number }
+  | { name: "orders" }
+  | { name: "favorites" }
+  | { name: "privacy" }
+  | { name: "terms" }
+  | { name: "unsubscribe" }
   | { name: "notfound" };
 
 /** Interpreta o caminho da URL. Aceita barra final. */
@@ -29,6 +34,11 @@ export function parseRoute(pathname: string): Route {
     if (parts[0] === "entrar") return { name: "login" };
     if (parts[0] === "conta") return { name: "account" };
     if (parts[0] === "finalizar") return { name: "checkout" };
+    if (parts[0] === "pedidos") return { name: "orders" };
+    if (parts[0] === "favoritos") return { name: "favorites" };
+    if (parts[0] === "privacidade") return { name: "privacy" };
+    if (parts[0] === "termos") return { name: "terms" };
+    if (parts[0] === "descadastrar") return { name: "unsubscribe" };
   }
   return { name: "notfound" };
 }

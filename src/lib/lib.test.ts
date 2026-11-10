@@ -295,3 +295,14 @@ describe("CPF e frete grátis", () => {
     expect(shippingFor(99999, 2000, 0)).toBe(2000);
   });
 });
+
+describe("rotas novas", () => {
+  it("reconhece páginas legais, favoritos, pedidos e descadastro", () => {
+    expect(parseRoute("/privacidade").name).toBe("privacy");
+    expect(parseRoute("/termos/").name).toBe("terms");
+    expect(parseRoute("/favoritos").name).toBe("favorites");
+    expect(parseRoute("/pedidos").name).toBe("orders");
+    expect(parseRoute("/descadastrar").name).toBe("unsubscribe");
+    expect(parseRoute("/privacidade/x").name).toBe("notfound");
+  });
+});

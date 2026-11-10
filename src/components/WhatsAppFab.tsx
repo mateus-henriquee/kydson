@@ -6,6 +6,7 @@ export function WhatsAppFab() {
   const url = buildWhatsAppUrl(STORE.whatsappNumber, "Olá! Tenho uma dúvida sobre a KYDSON.");
   if (!url) return null;
   return (
+    <aside aria-label="Atendimento pelo WhatsApp" className="wa-fab-wrap">
     <a className="wa-fab" href={url} target="_blank" rel="noopener noreferrer" aria-label="Falar com a KYDSON no WhatsApp (abre em nova aba)">
       <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" focusable="false">
         <path
@@ -14,5 +15,6 @@ export function WhatsAppFab() {
         />
       </svg>
     </a>
+    </aside>
   );
 }

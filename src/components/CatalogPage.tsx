@@ -93,7 +93,7 @@ function Browse({ base }: { base: ReturnType<typeof useCatalog>["products"] }) {
         {hasActiveFilters(f) && <span className="badge" aria-hidden="true">•</span>}
       </button>
 
-      <aside id="filtros" className={`filters ${open ? "is-open" : ""}`} aria-label="Filtros">
+      <section id="filtros" className={`filters ${open ? "is-open" : ""}`} aria-label="Filtros">
         {bounds && (
           <fieldset className="filters__group">
             <legend>Preço</legend>
@@ -143,7 +143,7 @@ function Browse({ base }: { base: ReturnType<typeof useCatalog>["products"] }) {
             Limpar filtros
           </button>
         )}
-      </aside>
+      </section>
 
       <div className="shop__results">
         <div className="shop__bar">
@@ -168,13 +168,16 @@ function Browse({ base }: { base: ReturnType<typeof useCatalog>["products"] }) {
             </button>
           </div>
         ) : (
-          <div className="grid grid--shop">
-            {list.map((p) => (
-              <div key={p.id} className="grid__cell">
-                <ProductCard product={p} />
-              </div>
-            ))}
-          </div>
+          <>
+            <h2 className="sr-only">Produtos</h2>
+            <div className="grid grid--shop">
+              {list.map((p) => (
+                <div key={p.id} className="grid__cell">
+                  <ProductCard product={p} />
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>

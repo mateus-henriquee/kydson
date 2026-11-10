@@ -5,11 +5,12 @@ Guarde cada chave em um bloco de notas; você vai colá-las na Vercel no passo 4
 
 ## 1. Supabase (banco, login e fotos)
 1. Crie conta em supabase.com → **New project** (região São Paulo). Anote a senha do banco.
-2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois `0002_calcados_perfis_config.sql`, `0003_modelo.sql` e `0004_cpf_envio.sql`, um de cada vez → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
+2. **SQL Editor** → cole `supabase/migrations/0001_init.sql` → **Run**; depois `0002_calcados_perfis_config.sql`, `0003_modelo.sql`, `0004_cpf_envio.sql` e `0005_privacidade_favoritos.sql`, um de cada vez → **Run**. (Tabelas, segurança, fotos, categoria Calçados, perfil Estoque, frete.) Ou, no seu PC: `npm run db:migrate`.
 3. **Project Settings → API**: copie `Project URL` (→ `SUPABASE_URL` e `VITE_SUPABASE_URL`), `anon public` (→ `VITE_SUPABASE_ANON_KEY`) e `service_role` (→ `SUPABASE_SERVICE_ROLE_KEY`, **secreta**).
 4. **Project Settings → Database → Connection string → Transaction pooler** (porta 6543): copie a URL, troque `[YOUR-PASSWORD]` pela senha (→ `DATABASE_URL`).
 5. **Authentication → Providers → Email**: deixe ligado. Recomendado: manter "Confirm email" ligado.
-6. **Authentication → URL Configuration**: em *Site URL* ponha o endereço do site (ex.: `https://kydson.vercel.app`) e em *Redirect URLs* adicione o mesmo endereço (usado nos e-mails de confirmação e "esqueci a senha").
+6. **Authentication → Email Templates**: cole o conteúdo de `supabase/email-templates/` (confirmar-cadastro → *Confirm signup*, recuperar-senha → *Reset password*, alterar-email → *Change email address*). Todos já têm o link de descadastro e o link da Política de Privacidade.
+7. **Authentication → URL Configuration**: em *Site URL* ponha o endereço do site (ex.: `https://kydson.vercel.app`) e em *Redirect URLs* adicione o mesmo endereço (usado nos e-mails de confirmação e "esqueci a senha").
 
 ## 2. Mercado Pago (pagamento)
 1. mercadopago.com.br/developers → **Suas integrações → Criar aplicação** (Checkout Pro).
@@ -61,3 +62,14 @@ Entre em `https://SEU-SITE/painel`. Outros colaboradores: aba **Equipe**.
 - **Frete grátis** acima de R$ 350,00 (só produtos; exatamente R$ 350,00 ainda paga frete). Mude em Painel → Configurações (0,00 desliga). O frete normal é um valor fixo.
 - O CPF aparece em Painel → Pedidos. O aviso de WhatsApp da loja não mudou (mesmo modelo `pedido_pago`).
 - Botão **Comprar pelo WhatsApp** (carrinho e checkout): abre a conversa com o pedido, frete e endereço. Não cria pedido no painel nem reserva estoque.
+
+
+## Privacidade, termos e cookies (LGPD)
+- Preencha na Vercel, antes de divulgar: `VITE_LEGAL_NAME`, `VITE_LEGAL_CNPJ` e `VITE_CONTACT_EMAIL`. O que ficar vazio não aparece nos textos; sem e-mail de contato, os pedidos de privacidade ficam só pelo WhatsApp.
+- Os textos estão em `src/pages/LegalPages.tsx`. São um ponto de partida baseado no que o site realmente faz. **Peça a um advogado para revisar** antes de publicar, principalmente o item de CPF, os prazos de guarda e a política de troca.
+- Ao mudar os textos, troque a versão em `src/config/legal.ts` **e** `server/legal.js` (o teste automático confere). Todos os clientes aceitam de novo na próxima compra.
+- O aceite (versão, data/hora, origem) fica na tabela `consents`. Sem aceite válido o servidor recusa o checkout.
+- Contas: checkbox "Tenho 18 anos ou mais" (declaração; o site não consegue verificar a idade). Menores só com consentimento do responsável, combinado com a loja.
+- Cookies: o banner tem Aceitar e Recusar com o mesmo destaque. **Hoje não existe nenhum rastreador no site.** Se um dia adicionar análise/pixel, carregue **somente** dentro de `whenAnalyticsAllowed(() => { ... })` (`src/lib/consent.ts`), e atualize a Política de Privacidade.
+- E-mails: o servidor não envia e-mails hoje (só o Supabase envia confirmação e senha). Se um dia enviar, use `emailFooter()` de `server/legal.js`: ele coloca o link de descadastro assinado e os cabeçalhos List-Unsubscribe, e recusa enviar se o segredo não existir. Defina `UNSUBSCRIBE_SECRET` na Vercel (um texto aleatório longo).
+- Licenças de código, fontes e imagens: veja `LICENSES.md`.

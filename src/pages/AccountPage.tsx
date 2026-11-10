@@ -1,11 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { request } from "../lib/http";
 import { emptyAddress, maskCpf, maskPhone, toAddressForm, validateDelivery, type AddressForm } from "../lib/address";
-import { formatBRL } from "../lib/money";
-import { fmtDateTime, STATUS_LABEL, type MyOrder } from "../lib/orders";
 import { Link, navigate } from "../lib/router";
 import { useAuth } from "../state/AuthContext";
 import { AddressFields } from "../components/AddressFields";
+import { OrdersList } from "../components/OrdersList";
 
 export function AccountPage() {
   const auth = useAuth();
@@ -13,10 +11,10 @@ export function AccountPage() {
   const [phone, setPhone] = useState("");
   const [cpf, setCpf] = useState("");
   const [addr, setAddr] = useState<AddressForm>(emptyAddress);
-  const [orders, setOrders] = useState<MyOrder[] | null>(null);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mkBusy, setMkBusy] = useState(false);
 
   useEffect(() => {
     document.title = "Minha conta — KYDSON";
@@ -31,9 +29,6 @@ export function AccountPage() {
     setPhone(auth.user.phone ? maskPhone(auth.user.phone) : "");
     setCpf(auth.user.cpf ? maskCpf(auth.user.cpf) : "");
     setAddr(toAddressForm(auth.user.address));
-    request<{ orders: MyOrder[] }>("GET", "/api/my/orders")
-      .then((r) => setOrders(r.orders))
-      .catch(() => setOrders([]));
   }, [auth.user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!auth.user) {
@@ -88,6 +83,15 @@ export function AccountPage() {
         </button>
       </div>
 
+      <nav className="actions" aria-label="Atalhos da conta">
+        <Link className="btn btn--ghost btn--sm" to="/pedidos">
+          Meus pedidos
+        </Link>
+        <Link className="btn btn--ghost btn--sm" to="/favoritos">
+          Meus favoritos
+        </Link>
+      </nav>
+
       <div className="checkout">
         <form className="form" onSubmit={save} noValidate>
           <h2 className="form__h">Meus dados</h2>
@@ -121,24 +125,36 @@ export function AccountPage() {
           <button className="btn" disabled={busy}>
             {busy ? "Salvando…" : "Salvar dados"}
           </button>
+          <h2 className="form__h">Privacidade</h2>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={Boolean(auth.user.marketing)}
+              disabled={mkBusy}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setMkBusy(true);
+                setError("");
+                try {
+                  await auth.saveProfile({ marketing: next });
+                  setMsg(next ? "Você vai receber novidades por e-mail." : "Você não receberá mais novidades por e-mail.");
+                } catch {
+                  setError("Não foi possível salvar essa preferência.");
+                } finally {
+                  setMkBusy(false);
+                }
+              }}
+            />
+            <span>Quero receber novidades por e-mail. Posso desmarcar quando quiser.</span>
+          </label>
+          <p className="form__hint">
+            Veja a <Link to="/privacidade">Política de Privacidade</Link> e os <Link to="/termos">Termos de Uso</Link>.
+          </p>
         </form>
 
         <div className="summary">
           <h2 className="form__h">Meus pedidos</h2>
-          {orders === null && <p className="empty">Carregando…</p>}
-          {orders?.length === 0 && <p className="empty">Você ainda não fez pedidos no site.</p>}
-          <ul>
-            {orders?.map((o) => (
-              <li key={o.id}>
-                <Link to={`/pedido/${o.id}`}>
-                  Pedido {o.id} · {fmtDateTime(o.createdAt)}
-                </Link>
-                <span>
-                  <span className={`status status--${o.status}`}>{STATUS_LABEL[o.status]}</span> {formatBRL(o.totalCents)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <OrdersList userId={auth.user.id} />
         </div>
       </div>
     </section>

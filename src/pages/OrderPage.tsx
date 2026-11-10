@@ -4,12 +4,12 @@ import { formatBRL } from "../lib/money";
 import { fmtDateTime, STATUS_LABEL, type MyOrder } from "../lib/orders";
 import { Link, navigate } from "../lib/router";
 import { useAuth } from "../state/AuthContext";
+import { CancelOrder } from "../components/CancelOrder";
 
 export function OrderPage({ id }: { id: number }) {
   const auth = useAuth();
   const [order, setOrder] = useState<MyOrder | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     document.title = `Pedido ${id} — KYDSON`;
@@ -40,19 +40,6 @@ export function OrderPage({ id }: { id: number }) {
     const t = window.setInterval(() => void refresh(), 8000);
     return () => window.clearInterval(t);
   }, [order?.status, refresh]);
-
-  const cancel = async () => {
-    if (!window.confirm("Cancelar este pedido?")) return;
-    setBusy(true);
-    try {
-      const r = await request<{ order: MyOrder }>("POST", `/api/my/orders/${id}/cancel`);
-      setOrder(r.order);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Não foi possível cancelar.");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <section className="page page--narrow" aria-labelledby="od-title">
@@ -119,11 +106,7 @@ export function OrderPage({ id }: { id: number }) {
                 Pagar agora
               </a>
             )}
-            {order.status === "pending" && (
-              <button className="btn btn--ghost" onClick={cancel} disabled={busy}>
-                Cancelar pedido
-              </button>
-            )}
+            <CancelOrder order={order} onChange={setOrder} />
             <Link className="btn btn--ghost" to="/conta">
               Minha conta
             </Link>

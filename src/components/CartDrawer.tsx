@@ -12,13 +12,33 @@ export function CartDrawer() {
   const { user, configured } = useAuth();
   const closeRef = useRef<HTMLButtonElement>(null);
   const lastFocus = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (open) {
       lastFocus.current = document.activeElement as HTMLElement | null;
       closeRef.current?.focus();
       document.body.style.overflow = "hidden";
-      const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") return setOpen(false);
+        if (e.key !== "Tab") return;
+        // Mantém o Tab dentro do carrinho enquanto ele está aberto.
+        const nodes = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])') ?? []).filter((n) => n.offsetParent !== null);
+        if (nodes.length === 0) return;
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        const cur = document.activeElement as HTMLElement | null;
+        if (!panelRef.current?.contains(cur)) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && cur === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && cur === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      };
       window.addEventListener("keydown", onKey);
       return () => {
         window.removeEventListener("keydown", onKey);
@@ -35,7 +55,7 @@ export function CartDrawer() {
   return (
     <div className={`drawer ${open ? "is-open" : ""}`} aria-hidden={!open}>
       <div className="drawer__scrim" onClick={() => setOpen(false)} />
-      <aside className="drawer__panel" role="dialog" aria-modal="true" aria-labelledby="cart-title">
+      <aside ref={panelRef} className="drawer__panel" role="dialog" aria-modal="true" aria-labelledby="cart-title">
         <header className="drawer__head">
           <h2 id="cart-title">Carrinho</h2>
           <button ref={closeRef} className="btn btn--ghost btn--sm" onClick={() => setOpen(false)}>

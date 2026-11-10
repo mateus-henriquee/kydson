@@ -16,6 +16,7 @@ import { applyPayment, handleWebhook } from "./payments.js";
 import { parseCheckout, parseId, parseOrder, parseProduct, parseProfile, parseUser, parseUuid } from "./validate.js";
 import { getSettings, parseSettings, saveSettings, shippingFor } from "./settings.js";
 import { notifyOrderPaid } from "./whatsapp.js";
+import { MAX_FAVORITES, TERMS_VERSION, acceptedVersion, createUnsubscribe, recordConsent } from "./legal.js";
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const iso = (d) => (d ? new Date(d).toISOString() : null);
@@ -51,11 +52,22 @@ const productOut = (r) => ({
   updatedAt: iso(r.updated_at),
 });
 
-const profileOut = (p) => ({ id: p.id, email: p.email, name: p.name, phone: p.phone, cpf: p.cpf ?? "", address: p.address, role: p.role });
+const profileOut = (p, consentVersion = null) => ({
+  id: p.id,
+  email: p.email,
+  name: p.name,
+  phone: p.phone,
+  cpf: p.cpf ?? "",
+  address: p.address,
+  role: p.role,
+  marketing: Boolean(p.marketing_optin),
+  consentVersion,
+});
 const teamOut = (p) => ({ id: p.id, name: p.name, email: p.email, role: p.role, active: p.active, createdAt: iso(p.created_at) });
 
-export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20_000 }) {
+export function createApi({ db, provider, storage, mp, wa, siteUrl, unsubSecret, sweepMs = 20_000 }) {
   const router = express.Router();
+  const unsub = createUnsubscribe(unsubSecret);
   const auth = createAuth({ db, provider });
   const sweep = () => expireStale(db, { minMs: sweepMs });
 
@@ -77,6 +89,7 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       res.json({
         shippingCents: settings.shippingCents,
         freeShippingFromCents: settings.freeShippingFromCents,
+        reserveMinutes: settings.reserveMinutes,
         products: rows.map((r) => {
           const promo = r.promo_price_cents !== null && r.promo_price_cents < r.price_cents;
           return {
@@ -109,7 +122,83 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
   );
 
   /* ---------- conta do cliente (qualquer pessoa logada) ---------- */
-  router.get("/me", auth.user, (req, res) => res.json({ user: profileOut(req.user) }));
+  router.get(
+    "/me",
+    auth.user,
+    wrap(async (req, res) => res.json({ user: profileOut(req.user, await acceptedVersion(db, req.user.id)) })),
+  );
+
+  // Registro do aceite dos termos e da declaração de maioridade (grava versão e horário).
+  router.post(
+    "/me/consent",
+    auth.user,
+    wrap(async (req, res) => {
+      const b = req.body ?? {};
+      if (b.adult !== true) throw new HttpError(400, "Contas são para maiores de 18 anos. Menores só com consentimento de um responsável, falando com a loja.", "adult_required");
+      if (b.terms !== true) throw new HttpError(400, "É preciso aceitar os Termos de Uso e a Política de Privacidade.", "terms_required");
+      if (b.version !== TERMS_VERSION) throw new HttpError(409, "Os termos foram atualizados. Recarregue a página e leia novamente.", "terms_outdated");
+      const source = ["cadastro", "checkout", "conta"].includes(b.source) ? b.source : "conta";
+      await recordConsent(db, { userId: req.user.id, source, declaredAt: b.declaredAt });
+      if (b.marketing === true) await db.query("update profiles set marketing_optin = true, marketing_updated_at = now() where id = $1", [req.user.id]);
+      const { rows } = await db.query("select * from profiles where id = $1", [req.user.id]);
+      res.json({ user: profileOut(rows[0], TERMS_VERSION) });
+    }),
+  );
+
+  // Descadastro por link assinado (sem login). Também serve ao cabeçalho List-Unsubscribe.
+  router.post(
+    "/unsubscribe",
+    wrap(async (req, res) => {
+      const id = unsub.verify(req.body?.token);
+      if (!id) throw new HttpError(400, "Link de descadastro inválido ou expirado.");
+      await db.query("update profiles set marketing_optin = false, marketing_updated_at = now() where id = $1", [id]);
+      res.json({ ok: true });
+    }),
+  );
+
+  /* ---------- favoritos (até 20 por pessoa) ---------- */
+  const favIds = async (q, userId) =>
+    (
+      await q.query(
+        "select f.product_id from favorites f join products p on p.id = f.product_id and p.active where f.user_id = $1 order by f.created_at desc",
+        [userId],
+      )
+    ).rows.map((r) => r.product_id);
+
+  router.get(
+    "/favorites",
+    auth.user,
+    wrap(async (req, res) => res.json({ ids: await favIds(db, req.user.id), max: MAX_FAVORITES })),
+  );
+
+  router.put(
+    "/favorites/:id",
+    auth.user,
+    wrap(async (req, res) => {
+      const id = parseId(req.params.id);
+      const ids = await db.tx(async (t) => {
+        await t.query("select id from profiles where id = $1 for update", [req.user.id]); // serializa pedidos da mesma pessoa
+        const prod = await t.query("select id from products where id = $1 and active", [id]);
+        if (!prod.rows[0]) throw new HttpError(404, "Produto não encontrado.");
+        const cur = await favIds(t, req.user.id);
+        if (!cur.includes(id)) {
+          if (cur.length >= MAX_FAVORITES) throw new HttpError(409, `Você já tem ${MAX_FAVORITES} favoritos. Remova um para salvar outro.`, "favorites_full");
+          await t.query("insert into favorites (user_id, product_id) values ($1,$2) on conflict do nothing", [req.user.id, id]);
+        }
+        return favIds(t, req.user.id);
+      });
+      res.json({ ids, max: MAX_FAVORITES });
+    }),
+  );
+
+  router.delete(
+    "/favorites/:id",
+    auth.user,
+    wrap(async (req, res) => {
+      await db.query("delete from favorites where user_id = $1 and product_id = $2", [req.user.id, parseId(req.params.id)]);
+      res.json({ ids: await favIds(db, req.user.id), max: MAX_FAVORITES });
+    }),
+  );
 
   router.put(
     "/me",
@@ -118,10 +207,10 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
       const p = parseProfile(req.body);
       const cur = req.user;
       const { rows } = await db.query(
-        "update profiles set name = $2, phone = $3, address = $4, cpf = $5 where id = $1 returning id, email, name, phone, cpf, address, role",
-        [cur.id, p.name ?? cur.name, p.phone ?? cur.phone, p.address === undefined ? (cur.address ? JSON.stringify(cur.address) : null) : p.address ? JSON.stringify(p.address) : null, p.cpf ?? cur.cpf ?? ""],
+        "update profiles set name = $2, phone = $3, address = $4, cpf = $5, marketing_optin = $6, marketing_updated_at = case when marketing_optin is distinct from $6 then now() else marketing_updated_at end where id = $1 returning id, email, name, phone, cpf, address, role, marketing_optin",
+        [cur.id, p.name ?? cur.name, p.phone ?? cur.phone, p.address === undefined ? (cur.address ? JSON.stringify(cur.address) : null) : p.address ? JSON.stringify(p.address) : null, p.cpf ?? cur.cpf ?? "", p.marketing ?? Boolean(cur.marketing_optin)],
       );
-      res.json({ user: profileOut(rows[0]) });
+      res.json({ user: profileOut(rows[0], await acceptedVersion(db, cur.id)) });
     }),
   );
 
@@ -182,6 +271,8 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, sweepMs = 20
     "/checkout",
     auth.user,
     wrap(async (req, res) => {
+      if ((await acceptedVersion(db, req.user.id)) !== TERMS_VERSION)
+        throw new HttpError(403, "Aceite os Termos de Uso e a Política de Privacidade para continuar.", "consent_required");
       if (!mp.enabled) throw new HttpError(503, "O pagamento online ainda não está disponível. Fale com a loja pelo WhatsApp.");
       const input = parseCheckout(req.body);
       await expireStale(db, { force: true });

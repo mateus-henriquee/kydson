@@ -1,6 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { navigate } from "../lib/router";
 import { useAuth } from "../state/AuthContext";
+import { Link } from "../lib/router";
+import { STORE } from "../config/store";
+import { normalizePhone } from "../lib/whatsapp";
 
 /** Só aceita caminhos internos para o "voltar para" (evita redirecionar para outro site). */
 const safeNext = (raw: string | null) => (raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/conta");
@@ -15,6 +18,10 @@ export function AuthPage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
+  const [terms, setTerms] = useState(false);
+  const [adult, setAdult] = useState(false);
+  const [marketing, setMarketing] = useState(false);
+  const guardianWa = normalizePhone(STORE.whatsappNumber);
 
   useEffect(() => {
     document.title = "Entrar — KYDSON";
@@ -65,7 +72,9 @@ export function AuthPage() {
       if (mode === "up") {
         if (name.trim().length < 2) throw new Error("Informe seu nome.");
         if (password.length < 8) throw new Error("A senha precisa ter pelo menos 8 caracteres.");
-        const r = await auth.signUp(name, email, password);
+        if (!adult) throw new Error("Contas são para maiores de 18 anos. Menores só com consentimento de um responsável: peça para ele criar a conta ou fale com a loja.");
+        if (!terms) throw new Error("Para criar a conta, aceite os Termos de Uso e a Política de Privacidade.");
+        const r = await auth.signUp(name, email, password, { marketing });
         if (r.needsConfirmation) setInfo("Conta criada! Enviamos um link de confirmação para o seu e-mail. Confirme e depois entre.");
         return;
       }
@@ -138,6 +147,43 @@ export function AuthPage() {
             />
             {mode === "up" && <small>Mínimo de 8 caracteres.</small>}
           </label>
+        )}
+        {mode === "up" && (
+          <fieldset className="consents">
+            <legend className="sr-only">Termos e consentimentos</legend>
+            <label className="check">
+              <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} required aria-describedby="minor-help" />
+              <span>Tenho 18 anos ou mais.</span>
+            </label>
+            <p id="minor-help" className="form__hint">
+              Menores de 18 anos só podem ter conta com consentimento de pai, mãe ou responsável.{" "}
+              {guardianWa ? (
+                <a href={`https://wa.me/${guardianWa}`} target="_blank" rel="noopener noreferrer">
+                  Fale com a loja pelo WhatsApp (abre em nova aba)
+                </a>
+              ) : (
+                "Fale com a loja."
+              )}
+            </p>
+            <label className="check">
+              <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} required />
+              <span>
+                Li e aceito os{" "}
+                <Link to="/termos" target="_blank" rel="noopener noreferrer">
+                  Termos de Uso
+                </Link>{" "}
+                e a{" "}
+                <Link to="/privacidade" target="_blank" rel="noopener noreferrer">
+                  Política de Privacidade
+                </Link>{" "}
+                (abrem em nova aba).
+              </span>
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} />
+              <span>(Opcional) Quero receber novidades por e-mail. Posso cancelar quando quiser.</span>
+            </label>
+          </fieldset>
         )}
 
         {error && (

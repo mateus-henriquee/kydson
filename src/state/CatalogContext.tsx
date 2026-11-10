@@ -9,6 +9,8 @@ interface CatalogCtx {
   shippingCents: number;
   /** Frete grátis quando os produtos passam deste valor (centavos). 0 = desligado. */
   freeShippingFromCents: number;
+  /** Quanto tempo o estoque fica reservado até o pagamento. */
+  reserveMinutes: number;
   status: Status;
   reload: () => void;
   /** Categorias que têm ao menos um produto. */
@@ -25,6 +27,7 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>("loading");
   const [shippingCents, setShippingCents] = useState(0);
   const [freeFrom, setFreeFrom] = useState(0);
+  const [reserveMinutes, setReserveMinutes] = useState(30);
 
   /** `silent`: atualização em segundo plano; não troca a tela por "carregando" nem por erro. */
   const load = useCallback(async (silent = false) => {
@@ -32,11 +35,12 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch("/api/catalog", { cache: "no-store" });
       if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as { products?: Product[]; shippingCents?: number; freeShippingFromCents?: number };
+      const data = (await res.json()) as { products?: Product[]; shippingCents?: number; freeShippingFromCents?: number; reserveMinutes?: number };
       if (!Array.isArray(data.products)) throw new Error("formato inválido");
       const next = data.products;
       setShippingCents(Number.isInteger(data.shippingCents) ? (data.shippingCents as number) : 0);
       setFreeFrom(Number.isInteger(data.freeShippingFromCents) ? (data.freeShippingFromCents as number) : 0);
+      setReserveMinutes(Number.isInteger(data.reserveMinutes) && (data.reserveMinutes as number) > 0 ? (data.reserveMinutes as number) : 30);
       // Evita re-renderizar a página inteira quando nada mudou.
       setProducts((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       setStatus("ready");
@@ -68,11 +72,12 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
       products,
       shippingCents,
       freeShippingFromCents: freeFrom,
+      reserveMinutes,
       status,
       reload: () => void load(),
       categories: CATEGORIES.filter((c) => products.some((p) => p.category === c.id)),
     }),
-    [products, shippingCents, freeFrom, status, load],
+    [products, shippingCents, freeFrom, reserveMinutes, status, load],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

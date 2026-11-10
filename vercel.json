@@ -31,6 +31,26 @@
       "destination": "/index.html"
     },
     {
+      "source": "/descadastrar",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/termos",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/privacidade",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/favoritos",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/pedidos",
+      "destination": "/index.html"
+    },
+    {
       "source": "/catalogo",
       "destination": "/index.html"
     },

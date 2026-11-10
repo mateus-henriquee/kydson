@@ -39,7 +39,7 @@ export function createApp(deps) {
           : err.type === "entity.too.large"
             ? "Arquivo grande demais (máximo 4 MB)."
             : err.message;
-    res.status(status).json({ error: message });
+    res.status(status).json({ error: message, ...(typeof err.code === "string" && status < 500 && /^[a-z_]+$/.test(err.code) ? { code: err.code } : {}) });
   });
 
   return app;

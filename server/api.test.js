@@ -1,3 +1,4 @@
+import { TERMS_VERSION, MAX_FAVORITES, createUnsubscribe, emailFooter } from "./legal.js";
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -77,7 +78,7 @@ const wa = {
 };
 
 /** Entra como alguém. Papel é definido direto no banco (como faria o script user:add). */
-async function as(email, role = "customer", name = "Pessoa Teste") {
+async function as(email, role = "customer", name = "Pessoa Teste", { consent = true } = {}) {
   let acc = [...accounts.entries()].find(([, a]) => a.email === email);
   if (!acc) {
     const id = crypto.randomUUID();
@@ -89,6 +90,10 @@ async function as(email, role = "customer", name = "Pessoa Teste") {
     `insert into profiles (id, email, name, role) values ($1,$2,$3,$4) on conflict (id) do update set role = $4, active = true`,
     [a.id, a.email, a.name, role],
   );
+  if (consent) {
+    const has = await db.query("select 1 from consents where user_id = $1", [a.id]);
+    if (!has.rows[0]) for (const k of ["terms", "privacy", "adult"]) await db.query("insert into consents (user_id, kind, version, source) values ($1,$2,$3,'conta')", [a.id, k, TERMS_VERSION]);
+  }
   return client(token, a.id);
 }
 
@@ -130,7 +135,7 @@ before(async () => {
   db = await openDb({ memory: true });
   await migrate(db);
   uploads = fs.mkdtempSync(path.join(os.tmpdir(), "kyd-up-"));
-  const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", sweepMs: 0 });
+  const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", unsubSecret: "segredo-de-teste", sweepMs: 0 });
   server = app.listen(0);
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -899,5 +904,133 @@ describe("modelo: mesmo item em cores diferentes, cada cor um produto", () => {
     assert.deepEqual(cat.map((p) => [p.priceCents, p.description, p.stock]).sort(), [[59900, "Couro branco", 4], [62900, "Couro preto", 0]].sort());
     assert.equal((await o.post("/api/products", product({ model: "x".repeat(81) }))).status, 400);
     assert.equal(b.json.product.model, "Nike Air 1");
+  });
+});
+
+describe("termos, aceite e menores", () => {
+  it("versão dos termos do servidor é a mesma do site", () => {
+    const src = fs.readFileSync(new URL("../src/config/legal.ts", import.meta.url), "utf8");
+    assert.equal(src.match(/TERMS_VERSION = "([^"]+)"/)[1], TERMS_VERSION);
+  });
+
+  it("sem aceite não finaliza compra; com aceite, registra versão e horário", async () => {
+    const c = await as("sem-aceite@x.com", "customer", "Sem Aceite", { consent: false });
+    const prod = (await (await as("dono-termos@x.com", "owner")).post("/api/products", product({ name: "Termos", priceCents: 1000, stock: 5 }))).json.product;
+    const body = checkoutBody([{ productId: prod.id, qty: 1 }]);
+    const r = await c.post("/api/checkout", body);
+    assert.equal(r.status, 403);
+    assert.equal(r.json.code, "consent_required");
+    assert.equal((await c.get("/api/me")).json.user.consentVersion, null);
+
+    // menor de idade / sem marcar
+    assert.equal((await c.post("/api/me/consent", { version: TERMS_VERSION, terms: true, adult: false })).json.code, "adult_required");
+    assert.equal((await c.post("/api/me/consent", { version: TERMS_VERSION, terms: false, adult: true })).json.code, "terms_required");
+    assert.equal((await c.post("/api/me/consent", { version: "1999-01-01", terms: true, adult: true })).status, 409);
+    assert.equal((await db.query("select count(*)::int n from consents where user_id = (select id from profiles where email = 'sem-aceite@x.com')")).rows[0].n, 0);
+
+    const ok = await c.post("/api/me/consent", { version: TERMS_VERSION, terms: true, adult: true, source: "cadastro", declaredAt: new Date(Date.now() - 3600_000).toISOString(), marketing: false });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.json.user.consentVersion, TERMS_VERSION);
+    const rows = (await db.query("select kind, version, source, declared_at, accepted_at from consents where user_id = $1 order by id", [ok.json.user.id])).rows;
+    assert.deepEqual(rows.map((x) => x.kind), ["terms", "privacy", "adult"]);
+    assert.ok(rows.every((x) => x.version === TERMS_VERSION && x.source === "cadastro" && x.declared_at && x.accepted_at));
+    assert.equal((await c.post("/api/checkout", body)).status, 201);
+  });
+
+  it("horário informado pelo navegador no futuro é ignorado", async () => {
+    const c = await as("futuro@x.com", "customer", "Futuro", { consent: false });
+    await c.post("/api/me/consent", { version: TERMS_VERSION, terms: true, adult: true, declaredAt: new Date(Date.now() + 86400_000).toISOString() });
+    const r = (await db.query("select declared_at from consents c join profiles p on p.id = c.user_id where p.email = 'futuro@x.com' limit 1")).rows[0];
+    assert.equal(r.declared_at, null);
+  });
+
+  it("termos antigos exigem novo aceite", async () => {
+    const c = await as("antigo@x.com", "customer", "Antigo", { consent: false });
+    const id = (await c.get("/api/me")).json.user.id;
+    await db.query("insert into consents (user_id, kind, version) values ($1,'terms','2000-01-01')", [id]);
+    assert.equal((await c.get("/api/me")).json.user.consentVersion, "2000-01-01");
+    const p = (await (await as("dono-termos@x.com", "owner")).post("/api/products", product({ name: "Antigo", priceCents: 1000, stock: 5 }))).json.product;
+    assert.equal((await c.post("/api/checkout", checkoutBody([{ productId: p.id, qty: 1 }]))).json.code, "consent_required");
+  });
+});
+
+describe("e-mail de novidades e descadastro", () => {
+  it("começa desligado, liga e desliga na conta e pelo link assinado", async () => {
+    const c = await as("mkt@x.com", "customer", "Mkt");
+    const me = (await c.get("/api/me")).json.user;
+    assert.equal(me.marketing, false);
+    assert.equal((await c.put("/api/me", { marketing: true })).json.user.marketing, true);
+    assert.equal((await c.put("/api/me", { marketing: "sim" })).status, 400);
+    const unsub = createUnsubscribe("segredo-de-teste");
+    const tok = unsub.token(me.id);
+    assert.equal((await anon().post("/api/unsubscribe", { token: tok + "x" })).status, 400);
+    assert.equal((await anon().post("/api/unsubscribe", { token: "lixo" })).status, 400);
+    assert.equal((await anon().post("/api/unsubscribe", { token: createUnsubscribe("outro").token(me.id) })).status, 400);
+    assert.equal((await anon().post("/api/unsubscribe", { token: tok })).status, 200);
+    assert.equal((await c.get("/api/me")).json.user.marketing, false);
+  });
+
+  it("todo e-mail do servidor leva link de descadastro e List-Unsubscribe", () => {
+    const f = emailFooter(createUnsubscribe("s"), "11111111-1111-1111-1111-111111111111", "https://loja.test/");
+    assert.match(f.url, /^https:\/\/loja\.test\/descadastrar\?t=/);
+    assert.ok(f.html.includes(f.url) && f.text.includes(f.url));
+    assert.equal(f.headers["List-Unsubscribe-Post"], "List-Unsubscribe=One-Click");
+    assert.throws(() => emailFooter(createUnsubscribe(""), "x", "https://a.b"));
+  });
+});
+
+describe("favoritos (máx. 20)", () => {
+  let owner, ids;
+  before(async () => {
+    owner = await as("dono-fav@x.com", "owner");
+    ids = [];
+    for (let i = 0; i < 22; i++) ids.push((await owner.post("/api/products", product({ name: `Fav ${i}`, priceCents: 1000 + i, stock: 3 }))).json.product.id);
+  });
+
+  it("exige login", async () => {
+    assert.equal((await anon().get("/api/favorites")).status, 401);
+    assert.equal((await anon().put(`/api/favorites/${ids[0]}`)).status, 401);
+  });
+
+  it("salva, repete sem duplicar, remove, e produto inexistente dá 404", async () => {
+    const c = await as("fav1@x.com");
+    assert.deepEqual((await c.get("/api/favorites")).json.ids, []);
+    await c.put(`/api/favorites/${ids[0]}`);
+    const r = await c.put(`/api/favorites/${ids[0]}`);
+    assert.deepEqual(r.json.ids, [ids[0]]);
+    assert.equal(r.json.max, MAX_FAVORITES);
+    assert.equal((await c.put("/api/favorites/99999999")).status, 404);
+    assert.deepEqual((await c.del(`/api/favorites/${ids[0]}`)).json.ids, []);
+  });
+
+  it("limite de 20: o 21º é recusado, mas repetir um existente continua ok", async () => {
+    const c = await as("fav2@x.com");
+    for (let i = 0; i < 20; i++) assert.equal((await c.put(`/api/favorites/${ids[i]}`)).status, 200);
+    const over = await c.put(`/api/favorites/${ids[20]}`);
+    assert.equal(over.status, 409);
+    assert.equal(over.json.code, "favorites_full");
+    assert.equal((await c.put(`/api/favorites/${ids[3]}`)).status, 200);
+    assert.equal((await c.get("/api/favorites")).json.ids.length, 20);
+    await c.del(`/api/favorites/${ids[0]}`);
+    assert.equal((await c.put(`/api/favorites/${ids[20]}`)).status, 200);
+  });
+
+  it("pedidos simultâneos não passam de 20", async () => {
+    const c = await as("fav3@x.com");
+    const res = await Promise.all(ids.map((id) => c.put(`/api/favorites/${id}`)));
+    assert.equal(res.filter((r) => r.status === 200).length, 20);
+    assert.equal(res.filter((r) => r.status === 409).length, 2);
+    assert.equal((await db.query("select count(*)::int n from favorites where user_id = (select id from profiles where email='fav3@x.com')")).rows[0].n, 20);
+  });
+
+  it("cada pessoa só vê os seus; produto desativado some da lista e libera vaga", async () => {
+    const a = await as("fav4@x.com");
+    const b = await as("fav5@x.com");
+    await a.put(`/api/favorites/${ids[1]}`);
+    assert.deepEqual((await b.get("/api/favorites")).json.ids, []);
+    await db.query("update products set active = false where id = $1", [ids[1]]);
+    assert.deepEqual((await a.get("/api/favorites")).json.ids, []);
+    assert.equal((await a.put(`/api/favorites/${ids[1]}`)).status, 404);
+    await db.query("update products set active = true where id = $1", [ids[1]]);
   });
 });

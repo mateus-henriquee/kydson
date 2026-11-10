@@ -1,4 +1,6 @@
 import { STORE } from "../config/store";
+import { Link } from "../lib/router";
+import { openCookieSettings } from "../lib/consent";
 import { Logo } from "./Logo";
 
 export function Footer() {
@@ -10,6 +12,11 @@ export function Footer() {
         <a href={STORE.instagramUrl} target="_blank" rel="noopener noreferrer">
           {STORE.instagramHandle}
         </a>
+        <Link to="/privacidade">Privacidade</Link>
+        <Link to="/termos">Termos de uso</Link>
+        <button type="button" className="footer__btn" onClick={openCookieSettings}>
+          Preferências de cookies
+        </button>
         <a href="/painel">Acesso colaboradores</a>
       </span>
     </footer>

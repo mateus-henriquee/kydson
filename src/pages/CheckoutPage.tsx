@@ -14,7 +14,7 @@ import { AddressFields } from "../components/AddressFields";
 export function CheckoutPage() {
   const auth = useAuth();
   const cart = useCart();
-  const { shippingCents: fee, freeShippingFromCents } = useCatalog();
+  const { shippingCents: fee, freeShippingFromCents, reserveMinutes } = useCatalog();
   const shippingCents = shippingFor(cart.totalCents, fee, freeShippingFromCents);
   const grand = cart.totalCents + shippingCents;
   const [name, setName] = useState("");
@@ -23,6 +23,8 @@ export function CheckoutPage() {
   const [addr, setAddr] = useState<AddressForm>(emptyAddress);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [terms, setTerms] = useState(false);
+  const [adult, setAdult] = useState(false);
   const [filled, setFilled] = useState(false);
 
   useEffect(() => {
@@ -86,9 +88,11 @@ export function CheckoutPage() {
     e.preventDefault();
     const problem = validateDelivery(name, phone, addr, cpf);
     if (problem) return setError(problem);
+    if (!auth.consentOk && !(terms && adult)) return setError("Para pagar, confirme que tem 18 anos ou mais e aceite os Termos de Uso e a Política de Privacidade.");
     setError("");
     setBusy(true);
     try {
+      if (!auth.consentOk) await auth.acceptTerms({ source: "checkout" });
       const r = await request<{ orderId: number; checkoutUrl: string }>("POST", "/api/checkout", {
         items: cart.lines.map((l) => ({ productId: l.product.id, variation: l.variation, color: l.color, qty: l.qty })),
         name: name.trim(),
@@ -130,6 +134,29 @@ export function CheckoutPage() {
           <h2 className="form__h">Endereço de entrega</h2>
           <p className="form__hint">Entregamos em todo o Brasil.</p>
           <AddressFields value={addr} onChange={setAddr} disabled={busy} />
+          {!auth.consentOk && (
+            <fieldset className="consents" disabled={busy}>
+              <legend className="form__h">Confirmações</legend>
+              <label className="check">
+                <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} required />
+                <span>Tenho 18 anos ou mais.</span>
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} required />
+                <span>
+                  Li e aceito os{" "}
+                  <Link to="/termos" target="_blank" rel="noopener noreferrer">
+                    Termos de Uso
+                  </Link>{" "}
+                  e a{" "}
+                  <Link to="/privacidade" target="_blank" rel="noopener noreferrer">
+                    Política de Privacidade
+                  </Link>{" "}
+                  (abrem em nova aba).
+                </span>
+              </label>
+            </fieldset>
+          )}
           {error && (
             <p className="form__error" role="alert">
               {error}
@@ -138,7 +165,7 @@ export function CheckoutPage() {
           <button className="btn btn--block" disabled={busy}>
             {busy ? "Abrindo pagamento…" : `Pagar ${formatBRL(grand)} com Mercado Pago`}
           </button>
-          <p className="form__hint">Você será levado ao Mercado Pago. O estoque fica reservado por 30 minutos.</p>
+          <p className="form__hint">Você será levado ao Mercado Pago. O estoque fica reservado por {reserveMinutes} minutos.</p>
           {waOk && (
             <>
               <p className="form__or">ou</p>
@@ -158,7 +185,7 @@ export function CheckoutPage() {
           )}
         </form>
 
-        <aside className="summary" aria-label="Resumo do pedido">
+        <section className="summary" aria-label="Resumo do pedido">
           <h2 className="form__h">Resumo</h2>
           <ul>
             {cart.lines.map((l) => (
@@ -183,7 +210,7 @@ export function CheckoutPage() {
             <strong>{formatBRL(grand)}</strong>
           </div>
           <p className="form__hint">O valor final é conferido pelo servidor com o preço atual.</p>
-        </aside>
+        </section>
       </div>
     </section>
   );

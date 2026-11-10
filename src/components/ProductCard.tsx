@@ -2,6 +2,7 @@ import { discountPct, isAvailable, categoryLabel, type Product } from "../data/p
 import { formatBRL } from "../lib/money";
 import { Link } from "../lib/router";
 import { LOGO_SRC } from "./Logo";
+import { FavoriteButton } from "./FavoriteButton";
 
 /**
  * Cartão do produto. A aparência muda conforme os sinalizadores do painel:
@@ -70,6 +71,7 @@ export function ProductCard({ product }: { product: Product }) {
           </div>
         </div>
       </Link>
+      <FavoriteButton id={product.id} name={product.name} className="fav--card" />
     </article>
   );
 }

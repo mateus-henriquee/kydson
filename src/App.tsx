@@ -17,6 +17,12 @@ import { AuthPage } from "./pages/AuthPage";
 import { AccountPage } from "./pages/AccountPage";
 import { CheckoutPage } from "./pages/CheckoutPage";
 import { OrderPage } from "./pages/OrderPage";
+import { OrdersPage } from "./pages/OrdersPage";
+import { FavoritesPage } from "./pages/FavoritesPage";
+import { PrivacyPage, TermsPage } from "./pages/LegalPages";
+import { UnsubscribePage } from "./pages/UnsubscribePage";
+import { CookieBanner } from "./components/CookieBanner";
+import { FavoritesProvider } from "./state/FavoritesContext";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WhatsAppFab } from "./components/WhatsAppFab";
 import { parseRoute, usePathname } from "./lib/router";
@@ -41,6 +47,7 @@ export default function App() {
   return (
     <AuthProvider>
     <CatalogProvider>
+      <FavoritesProvider>
       <CartProvider>
       <a className="skip" href="#conteudo">
         Pular para o conteúdo
@@ -65,12 +72,19 @@ export default function App() {
         {route.name === "account" && <AccountPage />}
         {route.name === "checkout" && <CheckoutPage />}
         {route.name === "order" && <OrderPage id={route.id} />}
+        {route.name === "orders" && <OrdersPage />}
+        {route.name === "favorites" && <FavoritesPage />}
+        {route.name === "privacy" && <PrivacyPage />}
+        {route.name === "terms" && <TermsPage />}
+        {route.name === "unsubscribe" && <UnsubscribePage />}
         {route.name === "notfound" && <NotFoundPage />}
       </main>
       <Footer />
       <CartDrawer />
       <WhatsAppFab />
+      <CookieBanner />
       </CartProvider>
+      </FavoritesProvider>
     </CatalogProvider>
     </AuthProvider>
   );

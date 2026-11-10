@@ -1,3 +1,4 @@
+import { FavoriteButton } from "./FavoriteButton";
 import { useEffect, useMemo, useState } from "react";
 import { CATEGORY_SLUGS, categoryLabel, discountPct, isAvailable, type Product } from "../data/products";
 import { recommend } from "../lib/catalogFilter";
@@ -126,7 +127,10 @@ function Detail({ product, all }: { product: Product; all: Product[] }) {
             {!available && <span className="tag tag--off">Esgotado</span>}
           </div>
           <p className="card__cat">{categoryLabel(product.category)}</p>
-          <h1 id="pdp-title">{product.name}</h1>
+          <div className="pdp__titlerow">
+            <h1 id="pdp-title">{product.name}</h1>
+            <FavoriteButton id={product.id} name={product.name} />
+          </div>
 
           <p className={`pdp__price ${promo > 0 ? "is-promo" : ""} ${available ? "" : "is-muted"}`}>
             {promo > 0 && product.compareAtCents !== null && <s>{formatBRL(product.compareAtCents)}</s>}

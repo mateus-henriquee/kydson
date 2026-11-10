@@ -10,7 +10,8 @@
     "user:add": "node --env-file-if-exists=.env server/create-user.js",
     "test": "vitest run && node --no-warnings --test server/api.test.js",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "node --env-file-if-exists=.env server/migrate.js"
+    "db:migrate": "node --env-file-if-exists=.env server/migrate.js",
+    "licenses": "npx --yes license-checker-rseidelsohn --production --summary"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",

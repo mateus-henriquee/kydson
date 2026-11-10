@@ -48,6 +48,16 @@ export function Header() {
         <a className="header__ig" href={STORE.instagramUrl} target="_blank" rel="noopener noreferrer">
           {STORE.instagramHandle}
         </a>
+        {configured && user && (
+          <Link className="header__ig" to="/pedidos" aria-current={cur("/pedidos")}>
+            Meus pedidos
+          </Link>
+        )}
+        {configured && (
+          <Link className="header__ig" to="/favoritos" aria-current={cur("/favoritos")}>
+            Favoritos
+          </Link>
+        )}
         {configured && (
           <Link className="header__ig" to={user ? "/conta" : "/entrar"}>
             {user ? "Minha conta" : "Entrar"}
