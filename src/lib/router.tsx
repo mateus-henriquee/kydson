@@ -58,6 +58,7 @@ export function usePathname(): string {
   useEffect(() => {
     const on = () => setPath(window.location.pathname);
     window.addEventListener("popstate", on);
+    on(); // o endereço pode ter mudado antes de este efeito rodar (ex.: redirecionamento no início)
     return () => window.removeEventListener("popstate", on);
   }, []);
   return path;

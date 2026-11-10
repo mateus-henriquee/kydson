@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError, request, setUnauthorizedHandler } from "../lib/http";
 import { authConfigured, getSupabase } from "../lib/supabase";
 import type { AddressForm } from "../lib/address";
 import { TERMS_VERSION } from "../config/legal";
+import { navigate } from "../lib/router";
 import { useToast } from "./ToastContext";
 
 const PENDING_KEY = "kydson:pending-consent";
@@ -56,6 +57,8 @@ interface AuthCtx {
   configured: boolean;
   /** true quando a pessoa abriu o link de "esqueci a senha" e precisa definir uma nova. */
   recovery: boolean;
+  /** Motivo, quando a pessoa abriu um link de e-mail vencido ou inválido. */
+  linkError: string;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (name: string, email: string, password: string, opts: { marketing: boolean }) => Promise<{ needsConfirmation: boolean }>;
   /** true quando a pessoa já aceitou a versão atual dos termos. */
@@ -85,9 +88,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Profile | null>(null);
   const [status, setStatus] = useState<AuthCtx["status"]>(authConfigured ? "loading" : "anon");
   const [recovery, setRecovery] = useState(false);
+  const [linkError, setLinkError] = useState("");
   const { say } = useToast();
+  /** Motivo da última falha ao abrir o perfil (para mostrar na tela de entrar). */
+  const loadError = useRef("");
 
   const loadProfile = useCallback(async (): Promise<Profile | null> => {
+    loadError.current = "";
     try {
       let r = await request<{ user: Profile }>("GET", "/api/me");
       // Aceite feito no cadastro, antes de a conta ser confirmada por e-mail: registra agora (só para o mesmo e-mail).
@@ -114,6 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus("user");
       return r.user;
     } catch (e) {
+      loadError.current = e instanceof ApiError ? e.message : "Não foi possível abrir a sua conta. Tente novamente.";
       // Sessão inválida ou conta desativada: sai de vez.
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
         try {
@@ -136,21 +144,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setStatus("anon");
     });
+    // Link do e-mail vencido/inválido: mostra o motivo na tela de entrar em vez de cair na página inicial.
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    // O link do e-mail pode cair em qualquer página (ex.: a inicial): leva para o formulário de nova senha.
+    const goRecovery = () => {
+      setRecovery(true);
+      // Mantém o #... do link: o supabase-js ainda vai ler o token dele ao iniciar.
+      if (window.location.pathname !== "/entrar") navigate("/entrar" + window.location.hash);
+    };
+    if (hash.get("type") === "recovery" && hash.get("access_token")) goRecovery();
+    if (hash.get("error_code")) {
+      setLinkError(hash.get("error_code") === "otp_expired" ? "Este link venceu ou já foi usado. Peça um novo em “Esqueci minha senha”." : "Não foi possível usar este link. Peça um novo e tente de novo.");
+      if (window.location.pathname !== "/entrar") navigate("/entrar" + window.location.hash);
+    }
     getSupabase()
       .then(async (sb) => {
-        const { data } = await sb.auth.getSession();
-        if (!alive) return;
-        if (data.session) await loadProfile();
-        else setStatus("anon");
+        // Assine ANTES de ler a sessão: o supabase-js processa o link do e-mail (#access_token=...) ao iniciar
+        // e já dispara PASSWORD_RECOVERY nesse momento; assinando depois, o evento se perderia.
         const sub = sb.auth.onAuthStateChange((event, session) => {
           // Não chame o Supabase aqui dentro (trava); adia para fora do callback.
-          if (event === "PASSWORD_RECOVERY") setRecovery(true);
+          if (event === "PASSWORD_RECOVERY") goRecovery();
           if (event === "SIGNED_OUT") {
             setUser(null);
             setStatus("anon");
           } else if (event === "SIGNED_IN" && session) setTimeout(() => void loadProfile(), 0);
         });
         off = () => sub.data.subscription.unsubscribe();
+        const { data } = await sb.auth.getSession();
+        if (!alive) return;
+        if (data.session) await loadProfile();
+        else setStatus("anon");
       })
       .catch(() => alive && setStatus("anon"));
     return () => {
@@ -165,13 +188,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       configured: authConfigured,
       recovery,
+      linkError,
       async signIn(email, password) {
         const sb = await getSupabase();
         const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
         if (error) throw friendly(error);
         const me = await loadProfile();
         if (me) say(`Você entrou na conta. Olá, ${firstName(me)}!`);
-        else throw new Error("Não foi possível abrir a sua conta. Tente novamente.");
+        else throw new Error(loadError.current || "Não foi possível abrir a sua conta. Tente novamente.");
       },
       async signUp(name, email, password, opts) {
         const sb = await getSupabase();
@@ -211,7 +235,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { error } = await sb.auth.updateUser({ password });
         if (error) throw friendly(error);
         setRecovery(false);
-        await loadProfile();
+        const me = await loadProfile();
+        if (!me) throw new Error(loadError.current || "Senha alterada, mas não foi possível abrir a conta. Entre novamente.");
+        say("Senha alterada. Você já está logado.");
       },
       consentOk: user?.consentVersion === TERMS_VERSION,
       async acceptTerms({ source, marketing }) {
@@ -230,7 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(r.user);
       },
     }),
-    [status, user, recovery, loadProfile, say],
+    [status, user, recovery, linkError, loadProfile, say],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

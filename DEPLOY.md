@@ -10,7 +10,7 @@ Guarde cada chave em um bloco de notas; você vai colá-las na Vercel no passo 4
 4. **Project Settings → Database → Connection string → Transaction pooler** (porta 6543): copie a URL, troque `[YOUR-PASSWORD]` pela senha (→ `DATABASE_URL`).
 5. **Authentication → Providers → Email**: deixe ligado. Recomendado: manter "Confirm email" ligado.
 6. **Authentication → Email Templates**: cole o conteúdo de `supabase/email-templates/` (confirmar-cadastro → *Confirm signup*, recuperar-senha → *Reset password*, alterar-email → *Change email address*). Todos já têm o link de descadastro e o link da Política de Privacidade.
-7. **Authentication → URL Configuration**: em *Site URL* ponha o endereço do site (ex.: `https://kydson.vercel.app`) e em *Redirect URLs* adicione o mesmo endereço (usado nos e-mails de confirmação e "esqueci a senha").
+7. **Authentication → URL Configuration**: em *Site URL* ponha o endereço do site (ex.: `https://kydson.vercel.app`) e em *Redirect URLs* adicione **`https://kydson.vercel.app/entrar`** e **`https://kydson.vercel.app/**`** (troque pelo seu endereço). Sem isso o link do e-mail "esqueci a senha" cai na página inicial em vez do formulário de nova senha. (O site também redireciona para o formulário se o link cair em outra página, mas a lista de Redirect URLs deve estar correta.)
 
 ## 2. Mercado Pago (pagamento)
 1. mercadopago.com.br/developers → **Suas integrações → Criar aplicação** (Checkout Pro).

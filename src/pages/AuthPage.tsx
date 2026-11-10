@@ -194,9 +194,9 @@ export function AuthPage() {
           </fieldset>
         )}
 
-        {error && (
+        {(error || auth.linkError) && (
           <p className="form__error" role="alert">
-            {error}
+            {error || auth.linkError}
           </p>
         )}
         {info && (
