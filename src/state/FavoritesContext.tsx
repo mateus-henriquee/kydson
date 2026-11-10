@@ -1,6 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { request } from "../lib/http";
 import { navigate } from "../lib/router";
+import { clearPending, readPending, savePending } from "../lib/pending";
+import { useToast } from "./ToastContext";
 import { useAuth } from "./AuthContext";
 
 interface FavState {
@@ -15,20 +17,26 @@ interface FavState {
 const Ctx = createContext<FavState | null>(null);
 const DEFAULT_MAX = 20;
 
+/** Leva a tela e o foco até o coração do item (a página pode ainda estar carregando; tenta por ~3 s). */
+function showFavorite(id: number) {
+  let tries = 0;
+  const t = window.setInterval(() => {
+    const el = document.querySelector<HTMLElement>(`[data-fav-id="${id}"]`);
+    if (el) {
+      window.clearInterval(t);
+      el.scrollIntoView({ block: "center" });
+      el.focus({ preventScroll: true });
+    } else if (++tries > 20) window.clearInterval(t);
+  }, 150);
+}
+
 export function FavoritesProvider({ children }: { children: ReactNode }) {
   const { user, status } = useAuth();
   const [ids, setIds] = useState<number[]>([]);
   const [max, setMax] = useState(DEFAULT_MAX);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const timer = useRef<number>();
+  const { say } = useToast();
   const uid = user?.id;
-
-  const say = useCallback((m: string) => {
-    setMessage(m);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setMessage(""), 5000);
-  }, []);
 
   useEffect(() => {
     if (!uid) {
@@ -38,10 +46,30 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
     let alive = true;
     setLoading(true);
     request<{ ids: number[]; max: number }>("GET", "/api/favorites")
-      .then((r) => {
+      .then(async (r) => {
         if (!alive) return;
         setIds(r.ids);
         setMax(r.max);
+        // A pessoa tentou favoritar sem estar logada: conclui agora e mostra o item.
+        const pend = readPending();
+        if (!pend) return;
+        clearPending();
+        if (r.ids.includes(pend.id)) {
+          say(`${pend.name} já está nos favoritos.`);
+        } else if (r.ids.length >= r.max) {
+          say(`Você já tem ${r.max} favoritos. Remova um para salvar ${pend.name}.`);
+        } else {
+          try {
+            const done = await request<{ ids: number[]; max: number }>("PUT", `/api/favorites/${pend.id}`);
+            if (!alive) return;
+            setIds(done.ids);
+            setMax(done.max);
+            say(`${pend.name} salvo nos favoritos.`);
+          } catch (e) {
+            say(e instanceof Error ? e.message : "Não foi possível salvar o favorito. Toque no coração para tentar de novo.");
+          }
+        }
+        showFavorite(pend.id);
       })
       .catch(() => alive && setIds([]))
       .finally(() => alive && setLoading(false));
@@ -53,7 +81,9 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
   const toggle = useCallback(
     async (id: number, name = "Produto") => {
       if (status !== "user") {
-        navigate(`/entrar?next=${encodeURIComponent(window.location.pathname)}`);
+        const path = window.location.pathname + window.location.search;
+        savePending({ id, name, path });
+        navigate(`/entrar?next=${encodeURIComponent(path)}`);
         return;
       }
       const was = ids.includes(id);
@@ -80,9 +110,6 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={value}>
       {children}
-      <div className="fav-toast" role="status" aria-live="polite">
-        {message}
-      </div>
     </Ctx.Provider>
   );
 }

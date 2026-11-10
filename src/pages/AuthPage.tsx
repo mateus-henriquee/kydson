@@ -4,13 +4,16 @@ import { useAuth } from "../state/AuthContext";
 import { Link } from "../lib/router";
 import { STORE } from "../config/store";
 import { normalizePhone } from "../lib/whatsapp";
+import { readPending } from "../lib/pending";
 
 /** Só aceita caminhos internos para o "voltar para" (evita redirecionar para outro site). */
 const safeNext = (raw: string | null) => (raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/conta");
 
 export function AuthPage() {
   const auth = useAuth();
-  const next = safeNext(new URLSearchParams(window.location.search).get("next"));
+  const pending = readPending();
+  // Voltar para: o endereço pedido; senão, a página do item que a pessoa ia favoritar; senão, a conta.
+  const next = safeNext(new URLSearchParams(window.location.search).get("next") ?? pending?.path ?? null);
   const [mode, setMode] = useState<"in" | "up" | "forgot">("in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -112,6 +115,11 @@ export function AuthPage() {
       <h1 id="auth-title" className="page__title-sm">
         {mode === "up" ? "Criar conta" : mode === "forgot" ? "Recuperar senha" : "Entrar"}
       </h1>
+      {pending && (
+        <p className="notice" role="status">
+          Entre para salvar <strong>{pending.name}</strong> nos favoritos. Depois você volta para este item.
+        </p>
+      )}
       {next === "/finalizar" && <p className="form__hint">Para pagar o pedido é preciso ter uma conta.</p>}
 
       <div className="tabs" role="group" aria-label="Entrar ou criar conta">

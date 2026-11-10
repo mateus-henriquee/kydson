@@ -3,6 +3,7 @@ import { ApiError, request, setUnauthorizedHandler } from "../lib/http";
 import { authConfigured, getSupabase } from "../lib/supabase";
 import type { AddressForm } from "../lib/address";
 import { TERMS_VERSION } from "../config/legal";
+import { useToast } from "./ToastContext";
 
 const PENDING_KEY = "kydson:pending-consent";
 interface Pending {
@@ -26,6 +27,12 @@ const clearPending = () => {
     /* ignora */
   }
 };
+
+/** Primeiro nome para mostrar na tela (ou a parte inicial do e-mail, se o nome estiver vazio). */
+export function firstName(u: { name?: string; email?: string }): string {
+  const n = String(u.name ?? "").trim().split(/\s+/)[0];
+  return n || String(u.email ?? "").split("@")[0] || "cliente";
+}
 
 export type Role = "customer" | "staff" | "owner";
 
@@ -78,8 +85,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Profile | null>(null);
   const [status, setStatus] = useState<AuthCtx["status"]>(authConfigured ? "loading" : "anon");
   const [recovery, setRecovery] = useState(false);
+  const { say } = useToast();
 
-  const loadProfile = useCallback(async () => {
+  const loadProfile = useCallback(async (): Promise<Profile | null> => {
     try {
       let r = await request<{ user: Profile }>("GET", "/api/me");
       // Aceite feito no cadastro, antes de a conta ser confirmada por e-mail: registra agora (só para o mesmo e-mail).
@@ -104,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else if (pend && r.user.consentVersion === TERMS_VERSION) clearPending();
       setUser(r.user);
       setStatus("user");
+      return r.user;
     } catch (e) {
       // Sessão inválida ou conta desativada: sai de vez.
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
@@ -115,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setUser(null);
       setStatus("anon");
+      return null;
     }
   }, []);
 
@@ -159,7 +169,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const sb = await getSupabase();
         const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
         if (error) throw friendly(error);
-        await loadProfile();
+        const me = await loadProfile();
+        if (me) say(`Você entrou na conta. Olá, ${firstName(me)}!`);
+        else throw new Error("Não foi possível abrir a sua conta. Tente novamente.");
       },
       async signUp(name, email, password, opts) {
         const sb = await getSupabase();
@@ -174,7 +186,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           /* sem armazenamento: o checkout pedirá o aceite */
         }
         if (data.session) {
-          await loadProfile();
+          const me = await loadProfile();
+          if (me) say(`Conta criada e login feito. Bem-vindo(a), ${firstName(me)}!`);
           return { needsConfirmation: false };
         }
         return { needsConfirmation: true };
@@ -185,6 +198,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } finally {
           setUser(null);
           setStatus("anon");
+          say("Você saiu da conta.");
         }
       },
       async sendReset(email) {
@@ -216,7 +230,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(r.user);
       },
     }),
-    [status, user, recovery, loadProfile],
+    [status, user, recovery, loadProfile, say],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

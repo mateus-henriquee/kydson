@@ -1,4 +1,5 @@
 import { AuthProvider } from "./state/AuthContext";
+import { ToastProvider } from "./state/ToastContext";
 import { CartProvider } from "./state/CartContext";
 import { CatalogProvider } from "./state/CatalogContext";
 import { useScrollProgress } from "./hooks/useScrollProgress";
@@ -45,6 +46,7 @@ export default function App() {
   useScrollProgress();
   const route = parseRoute(usePathname());
   return (
+    <ToastProvider>
     <AuthProvider>
     <CatalogProvider>
       <FavoritesProvider>
@@ -87,5 +89,6 @@ export default function App() {
       </FavoritesProvider>
     </CatalogProvider>
     </AuthProvider>
+    </ToastProvider>
   );
 }

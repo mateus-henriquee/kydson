@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cartReducer, clampQty, itemCount, parseStoredLines, priceLines, totalCents } from "./cart";
 import { centsToInput, formatBRL, parseMoneyInput } from "./money";
 import { buildOrderMessage, buildWhatsAppUrl, normalizePhone } from "./whatsapp";
@@ -304,5 +304,40 @@ describe("rotas novas", () => {
     expect(parseRoute("/pedidos").name).toBe("orders");
     expect(parseRoute("/descadastrar").name).toBe("unsubscribe");
     expect(parseRoute("/privacidade/x").name).toBe("notfound");
+  });
+});
+
+describe("ação pendente (favoritar sem login)", () => {
+  beforeEach(() => {
+    const m = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), clear: () => m.clear() });
+  });
+  it("guarda e lê dentro de 30 min", async () => {
+    const { savePending, readPending, clearPending } = await import("./pending");
+    savePending({ id: 5, name: "Relógio 5", path: "/catalogo/relogios?q=a" });
+    expect(readPending()).toMatchObject({ id: 5, name: "Relógio 5", path: "/catalogo/relogios?q=a" });
+    clearPending();
+    expect(readPending()).toBeNull();
+  });
+  it("expira depois de 30 min", async () => {
+    const { savePending, readPending } = await import("./pending");
+    savePending({ id: 5, name: "x", path: "/catalogo" });
+    expect(readPending(Date.now() + 31 * 60_000)).toBeNull();
+  });
+  it("recusa caminho externo, id inválido e lixo", async () => {
+    const { readPending } = await import("./pending");
+    const put = (v: unknown) => localStorage.setItem("kydson:pending-action", typeof v === "string" ? v : JSON.stringify(v));
+    const base = { kind: "favorite", id: 1, name: "x", path: "/catalogo", at: Date.now() };
+    for (const bad of [{ ...base, path: "https://evil.com" }, { ...base, path: "//evil.com" }, { ...base, id: 0 }, { ...base, id: 1.5 }, { ...base, kind: "outro" }, { ...base, at: Date.now() + 9e6 }]) {
+      put(bad);
+      expect(readPending()).toBeNull();
+    }
+    put("{lixo");
+    expect(readPending()).toBeNull();
+  });
+  it("firstName usa o primeiro nome ou o início do e-mail", async () => {
+    const { firstName } = await import("../state/AuthContext");
+    expect(firstName({ name: "  Ana Maria Souza ", email: "a@x.com" })).toBe("Ana");
+    expect(firstName({ name: "", email: "joao.silva@x.com" })).toBe("joao.silva");
   });
 });

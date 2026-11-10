@@ -8,6 +8,7 @@ export function FavoriteButton({ id, name, className = "" }: { id: number; name:
     <button
       type="button"
       className={`fav ${on ? "is-on" : ""} ${className}`}
+      data-fav-id={id}
       aria-pressed={on}
       aria-label={`${on ? "Remover dos favoritos" : "Salvar nos favoritos"}: ${name}`}
       onClick={() => void toggle(id, name)}
