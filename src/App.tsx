@@ -17,8 +17,9 @@ import { AuthPage } from "./pages/AuthPage";
 import { AccountPage } from "./pages/AccountPage";
 import { CheckoutPage } from "./pages/CheckoutPage";
 import { OrderPage } from "./pages/OrderPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { WhatsAppFab } from "./components/WhatsAppFab";
-import { Link, parseRoute, usePathname } from "./lib/router";
+import { parseRoute, usePathname } from "./lib/router";
 
 /** Fundo fixo que acompanha o scroll via --p (CSS). */
 function Backdrop() {
@@ -31,21 +32,6 @@ function Backdrop() {
         <line className="bd bd--d" x1="0" y1="400" x2="800" y2="400" />
       </svg>
     </div>
-  );
-}
-
-function NotFound() {
-  return (
-    <section className="page" aria-labelledby="nf">
-      <h1 id="nf" className="page__title-sm">
-        Página não encontrada
-      </h1>
-      <p>
-        <Link className="btn" to="/">
-          Voltar ao início
-        </Link>
-      </p>
-    </section>
   );
 }
 
@@ -79,7 +65,7 @@ export default function App() {
         {route.name === "account" && <AccountPage />}
         {route.name === "checkout" && <CheckoutPage />}
         {route.name === "order" && <OrderPage id={route.id} />}
-        {route.name === "notfound" && <NotFound />}
+        {route.name === "notfound" && <NotFoundPage />}
       </main>
       <Footer />
       <CartDrawer />
