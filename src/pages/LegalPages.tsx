@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { STORE } from "../config/store";
-import { LEGAL, TERMS_DATE_LABEL, TERMS_VERSION } from "../config/legal";
+import { INACTIVITY_MONTHS, LEGAL, TERMS_DATE_LABEL, TERMS_VERSION } from "../config/legal";
 import { Link } from "../lib/router";
 import { normalizePhone } from "../lib/whatsapp";
 import { openCookieSettings } from "../lib/consent";
@@ -145,8 +145,10 @@ export function PrivacyPage() {
 
       <h2>6. Por quanto tempo guardamos</h2>
       <ul>
-        <li>Dados da conta e favoritos: enquanto a conta existir.</li>
-        <li>Pedidos e dados de entrega: pelo prazo exigido pela legislação fiscal e para a defesa de direitos em eventual disputa.</li>
+        <li>
+          Dados da conta e favoritos: enquanto a conta existir. Contas de clientes sem nenhum acesso por {INACTIVITY_MONTHS} meses são excluídas automaticamente. Para evitar, basta entrar no site de vez em quando. Você também pode pedir a exclusão antes.
+        </li>
+        <li>Pedidos e dados de entrega: mesmo depois de a conta ser excluída, pelo prazo exigido pela legislação fiscal e para a defesa de direitos em eventual disputa.</li>
         <li>Registro de aceite: enquanto a conta existir, como prova do consentimento.</li>
       </ul>
 

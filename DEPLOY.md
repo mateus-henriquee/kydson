@@ -73,3 +73,12 @@ Entre em `https://SEU-SITE/painel`. Outros colaboradores: aba **Equipe**.
 - Cookies: o banner tem Aceitar e Recusar com o mesmo destaque. **Hoje não existe nenhum rastreador no site.** Se um dia adicionar análise/pixel, carregue **somente** dentro de `whenAnalyticsAllowed(() => { ... })` (`src/lib/consent.ts`), e atualize a Política de Privacidade.
 - E-mails: o servidor não envia e-mails hoje (só o Supabase envia confirmação e senha). Se um dia enviar, use `emailFooter()` de `server/legal.js`: ele coloca o link de descadastro assinado e os cabeçalhos List-Unsubscribe, e recusa enviar se o segredo não existir. Defina `UNSUBSCRIBE_SECRET` na Vercel (um texto aleatório longo).
 - Licenças de código, fontes e imagens: veja `LICENSES.md`.
+
+## Exclusão automática de contas inativas
+- **Prazo: 24 meses sem acessar o site** (o mesmo da Política de Privacidade). Escolhi 24 porque a lei pede que não se guarde dado sem necessidade, mas o cliente de relógio/perfume compra poucas vezes por ano; 3 a 6 meses apagaria gente que ainda é cliente. O mínimo aceito pelo código é 6 meses.
+- "Acesso" = a pessoa entrou no site logada (registrado em `profiles.last_seen_at`, no máximo 1 vez por dia). Quem já tinha conta começa com a data da migração `0006`, então **nada é excluído antes de 24 meses depois do deploy**.
+- Só exclui **clientes**. Nunca dono, atendimento, estoque, contas desativadas pela loja, nem quem tem pedido aguardando pagamento. No máximo 50 por execução.
+- **Os pedidos ficam** (obrigação legal): só deixam de apontar para a conta. Favoritos e registros de aceite saem junto.
+- **Automático:** `vercel.json` agenda toda segunda-feira (06:17 UTC). Para ativar, crie `CRON_SECRET` na Vercel (texto aleatório longo). Sem ele, a rota nem existe. Plano Hobby da Vercel permite no máximo 1 execução por dia: serve.
+- **Manual:** `npm run cleanup` só mostra quantas contas seriam excluídas (não apaga). `npm run cleanup -- --apply` exclui.
+- **Limite honesto:** o site não envia e-mail de aviso antes de excluir (ainda não existe envio de e-mails). Por isso o prazo é longo e a política avisa. Se quiser, o próximo passo é enviar um aviso 30 dias antes.

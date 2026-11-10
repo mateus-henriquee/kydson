@@ -1,3 +1,4 @@
+import { DEFAULT_MONTHS, findInactive, parseMonths, purgeInactive } from "./cleanup.js";
 import { TERMS_VERSION, MAX_FAVORITES, createUnsubscribe, emailFooter } from "./legal.js";
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -135,7 +136,7 @@ before(async () => {
   db = await openDb({ memory: true });
   await migrate(db);
   uploads = fs.mkdtempSync(path.join(os.tmpdir(), "kyd-up-"));
-  const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", unsubSecret: "segredo-de-teste", sweepMs: 0 });
+  const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", unsubSecret: "segredo-de-teste", cronSecret: "cron-segredo", sweepMs: 0 });
   server = app.listen(0);
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -1033,4 +1034,118 @@ describe("favoritos (máx. 20)", () => {
     assert.equal((await a.put(`/api/favorites/${ids[1]}`)).status, 404);
     await db.query("update products set active = true where id = $1", [ids[1]]);
   });
+});
+
+describe("exclusão de contas inativas", () => {
+  const ago = (months) => `now() - interval '${months} months'`;
+  const mk = async (email, role = "customer") => {
+    const c = await as(email, role);
+    const id = (await db.query("select id from profiles where email = $1", [email])).rows[0].id;
+    return { c, id };
+  };
+  const seen = (id, months) => db.query(`update profiles set last_seen_at = ${ago(months)} where id = $1`, [id]);
+  const exists = async (id) => (await db.query("select 1 from profiles where id = $1", [id])).rows.length === 1;
+
+  it("prazo: 24 meses, igual ao da Política de Privacidade; menos de 6 ou lixo é recusado", () => {
+    assert.equal(DEFAULT_MONTHS, 24);
+    const src = fs.readFileSync(new URL("../src/config/legal.ts", import.meta.url), "utf8");
+    assert.equal(Number(src.match(/INACTIVITY_MONTHS = (\d+)/)[1]), DEFAULT_MONTHS);
+    assert.equal(parseMonths(undefined), 24);
+    assert.equal(parseMonths("12"), 12);
+    for (const bad of ["5", "0", "-1", "abc", "1.5", "121"]) assert.throws(() => parseMonths(bad), /Prazo inválido/);
+  });
+
+  it("só exclui cliente ativo, inativo há mais que o prazo e sem pedido pendente", async () => {
+    const old = await mk("inat-velho@x.com");
+    const recent = await mk("inat-recente@x.com");
+    const owner = await mk("inat-dono@x.com", "owner");
+    const staff = await mk("inat-staff@x.com", "staff");
+    const stock = await mk("inat-estoque@x.com", "stock");
+    const banned = await mk("inat-banido@x.com");
+    const pend = await mk("inat-pendente@x.com");
+    for (const u of [old, owner, staff, stock, banned, pend]) await seen(u.id, 30);
+    await seen(recent.id, 23);
+    await db.query("update profiles set active = false where id = $1", [banned.id]);
+    await db.query("insert into orders (source, customer_id, status, total_cents) values ('site', $1, 'pending', 1000)", [pend.id]);
+
+    const ids = (await findInactive(db, { months: 24 })).map((x) => x.id);
+    assert.ok(ids.includes(old.id));
+    for (const u of [recent, owner, staff, stock, banned, pend]) assert.ok(!ids.includes(u.id));
+
+    // simulação não apaga nada
+    const dry = await purgeInactive({ db, provider, months: 24, apply: false });
+    assert.equal(dry.deleted, 0);
+    assert.ok(await exists(old.id));
+
+    const r = await purgeInactive({ db, provider, months: 24, apply: true });
+    assert.equal(r.failed, 0);
+    assert.ok(r.deleted >= 1);
+    assert.ok(!(await exists(old.id)));
+    for (const u of [recent, owner, staff, stock, banned, pend]) assert.ok(await exists(u.id), "não pode excluir " + u.id);
+    assert.equal((await old.c.get("/api/me")).status, 401); // a conta de login também saiu
+    assert.equal((await recent.c.get("/api/me")).status, 200);
+  });
+
+  it("mantém os pedidos; favoritos e aceites saem com a conta", async () => {
+    const u = await mk("inat-pedidos@x.com");
+    await db.query(
+      "insert into orders (source, customer_id, customer_name, customer_email, customer_cpf, status, total_cents) values ('site', $1, 'Fulano', 'inat-pedidos@x.com', '52998224725', 'paid', 5000)",
+      [u.id],
+    );
+    const prod = (await (await as("dono-inat@x.com", "owner")).post("/api/products", product({ name: "Inat", priceCents: 1000, stock: 2 }))).json.product;
+    await u.c.put(`/api/favorites/${prod.id}`);
+    assert.ok((await db.query("select 1 from consents where user_id = $1", [u.id])).rows.length >= 1);
+    await seen(u.id, 25);
+    await purgeInactive({ db, provider, months: 24, apply: true });
+    assert.ok(!(await exists(u.id)));
+    const o = (await db.query("select customer_id, customer_name, customer_cpf, status from orders where customer_email = 'inat-pedidos@x.com'")).rows[0];
+    assert.equal(o.status, "paid");
+    assert.equal(o.customer_id, null);
+    assert.equal(o.customer_name, "Fulano");
+    assert.equal((await db.query("select count(*)::int n from favorites where user_id = $1", [u.id])).rows[0].n, 0);
+    assert.equal((await db.query("select count(*)::int n from consents where user_id = $1", [u.id])).rows[0].n, 0);
+  });
+
+  it("entrar renova o último acesso (no máximo 1 vez por dia)", async () => {
+    const u = await mk("inat-login@x.com");
+    await db.query("update profiles set last_seen_at = now() - interval '5 days' where id = $1", [u.id]);
+    await u.c.get("/api/me");
+    const a = (await db.query("select now() - last_seen_at as d from profiles where id = $1", [u.id])).rows[0].d;
+    assert.ok(!a.days, "deveria ter renovado");
+    await db.query("update profiles set last_seen_at = now() - interval '2 hours' where id = $1", [u.id]);
+    await u.c.get("/api/me");
+    const b = (await db.query("select extract(epoch from now() - last_seen_at) as s from profiles where id = $1", [u.id])).rows[0].s;
+    assert.ok(Number(b) > 3600, "não deveria atualizar de novo no mesmo dia");
+    await seen(u.id, 40);
+    await u.c.get("/api/me"); // quem volta depois de muito tempo sai da lista
+    assert.ok(!(await findInactive(db, { months: 24 })).some((x) => x.id === u.id));
+  });
+
+  it("rota do cron exige o segredo, aceita GET e exclui", async () => {
+    const u = await mk("inat-cron@x.com");
+    await seen(u.id, 30);
+    assert.equal((await anon().get("/api/cron/cleanup")).status, 401);
+    assert.equal((await anon().get("/api/cron/cleanup", {})).status, 401);
+    const bad = await fetch(base + "/api/cron/cleanup", { headers: { Authorization: "Bearer errado" } });
+    assert.equal(bad.status, 401);
+    assert.ok(await exists(u.id));
+    const ok = await fetch(base + "/api/cron/cleanup", { headers: { Authorization: "Bearer cron-segredo" } });
+    assert.equal(ok.status, 200);
+    const j = await ok.json();
+    assert.equal(j.months, 24);
+    assert.ok(j.deleted >= 1);
+    assert.ok(!(await exists(u.id)));
+  });
+
+  it("sem CRON_SECRET a rota nem existe", async () => {
+    const app = createApp({ db, provider, storage: createLocalStorage({ dir: uploads }), mp, wa, siteUrl: "https://loja.test", sweepMs: 0 });
+    const srv = app.listen(0);
+    try {
+      const r = await fetch(`http://127.0.0.1:${srv.address().port}/api/cron/cleanup`, { headers: { Authorization: "Bearer " } });
+      assert.equal(r.status, 404);
+    } finally {
+      srv.close();
+    }
+  });
+
 });

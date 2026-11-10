@@ -5,6 +5,8 @@
  * precisarão aceitar de novo na próxima compra.
  */
 export const TERMS_VERSION = "2026-11-10";
+/** Contas de clientes sem acesso por este tempo são excluídas (igual a DEFAULT_MONTHS em server/cleanup.js). */
+export const INACTIVITY_MONTHS = 24;
 export const TERMS_DATE_LABEL = "10 de novembro de 2026";
 
 const env = (k: string) => ((import.meta.env[k] as string | undefined) ?? "").trim();

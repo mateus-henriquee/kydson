@@ -32,7 +32,8 @@ export function createAuth({ db, provider }) {
     // Primeiro acesso = perfil de cliente. Papel (colaborador/dono) nunca é alterado aqui.
     const { rows } = await db.query(
       `insert into profiles (id, email, name) values ($1, $2, $3)
-       on conflict (id) do update set email = excluded.email
+       on conflict (id) do update set email = excluded.email,
+         last_seen_at = case when profiles.last_seen_at < now() - interval '1 day' then now() else profiles.last_seen_at end
        returning id, email, name, phone, cpf, address, role, active, marketing_optin`,
       [u.id, u.email ?? "", u.name ?? ""],
     );

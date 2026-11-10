@@ -16,6 +16,7 @@ import { applyPayment, handleWebhook } from "./payments.js";
 import { parseCheckout, parseId, parseOrder, parseProduct, parseProfile, parseUser, parseUuid } from "./validate.js";
 import { getSettings, parseSettings, saveSettings, shippingFor } from "./settings.js";
 import { notifyOrderPaid } from "./whatsapp.js";
+import { DEFAULT_MONTHS, purgeInactive, secretOk } from "./cleanup.js";
 import { MAX_FAVORITES, TERMS_VERSION, acceptedVersion, createUnsubscribe, recordConsent } from "./legal.js";
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -65,7 +66,7 @@ const profileOut = (p, consentVersion = null) => ({
 });
 const teamOut = (p) => ({ id: p.id, name: p.name, email: p.email, role: p.role, active: p.active, createdAt: iso(p.created_at) });
 
-export function createApi({ db, provider, storage, mp, wa, siteUrl, unsubSecret, sweepMs = 20_000 }) {
+export function createApi({ db, provider, storage, mp, wa, siteUrl, unsubSecret, cronSecret, sweepMs = 20_000 }) {
   const router = express.Router();
   const unsub = createUnsubscribe(unsubSecret);
   const auth = createAuth({ db, provider });
@@ -153,6 +154,18 @@ export function createApi({ db, provider, storage, mp, wa, siteUrl, unsubSecret,
       if (!id) throw new HttpError(400, "Link de descadastro inválido ou expirado.");
       await db.query("update profiles set marketing_optin = false, marketing_updated_at = now() where id = $1", [id]);
       res.json({ ok: true });
+    }),
+  );
+
+  // Varredura diária/semanal (Vercel Cron). Só existe se CRON_SECRET estiver definido; a Vercel envia "Authorization: Bearer <CRON_SECRET>".
+  router.all(
+    "/cron/cleanup",
+    wrap(async (req, res) => {
+      if (!cronSecret) throw new HttpError(404, "Rota não encontrada.");
+      if (!secretOk(req.headers.authorization, cronSecret)) throw new HttpError(401, "Não autorizado.");
+      const r = await purgeInactive({ db, provider, months: DEFAULT_MONTHS, apply: true });
+      console.log(`Contas inativas: ${r.deleted} excluídas de ${r.found} (prazo ${r.months} meses, falhas ${r.failed}).`);
+      res.json({ months: r.months, found: r.found, deleted: r.deleted, failed: r.failed });
     }),
   );
 

@@ -24,5 +24,5 @@ export async function createAppFromEnv(env = process.env) {
   });
   const siteUrl = env.SITE_URL || (env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined);
 
-  return { app: createApp({ db, provider, storage, mp, wa, siteUrl, unsubSecret: env.UNSUBSCRIBE_SECRET || env.SUPABASE_SERVICE_ROLE_KEY }), db, mp, wa };
+  return { app: createApp({ db, provider, storage, mp, wa, siteUrl, unsubSecret: env.UNSUBSCRIBE_SECRET || env.SUPABASE_SERVICE_ROLE_KEY, cronSecret: env.CRON_SECRET }), db, mp, wa };
 }
