@@ -1677,7 +1677,7 @@ html {
 
 /* 404 */
 .nf{min-height:70vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:8rem 1.5rem 5rem;position:relative}
-.nf__code{font-size:clamp(6rem,24vw,14rem);line-height:1;margin:0;font-weight:700;letter-spacing:.04em;color:transparent;-webkit-text-stroke:1px var(--gold,#b8935a);opacity:.55}
+.nf__code{font-size:clamp(5rem,22vw,13rem);line-height:1;margin:0;font-weight:700;letter-spacing:.04em;color:transparent;-webkit-text-stroke:1px var(--gold,#b8935a);opacity:.55}
 .nf__title{font-size:clamp(1.6rem,4vw,2.6rem);margin:.4rem 0 .8rem;outline:none}
 .nf__text{max-width:36ch;opacity:.75;margin:0 0 2rem}
 .nf__actions{display:flex;gap:.75rem;flex-wrap:wrap;justify-content:center}

@@ -4,10 +4,55 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/index.js": { "maxDuration": 30, "includeFiles": "{server,supabase}/**" }
+    "api/index.js": {
+      "maxDuration": 30,
+      "includeFiles": "{server,supabase}/**"
+    }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/entrar",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/conta",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/finalizar",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/catalogo",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/catalogo/:slug(relogios|perfumes|acessorios|calcados|outros)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/produto/:id(\\d+)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/pedido/:id(\\d+)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/painel",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/painel/:path*",
+      "destination": "/index.html"
+    }
   ]
 }
