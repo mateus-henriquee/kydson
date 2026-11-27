@@ -74,6 +74,13 @@ Entre em `https://SEU-SITE/painel`. Outros colaboradores: aba **Equipe**.
 - E-mails: o Supabase envia confirmação e senha; o servidor envia só o aviso de exclusão por inatividade (veja abaixo, via Resend). Para qualquer outro e-mail que enviar, use `emailFooter()` de `server/legal.js`: ele coloca o link de descadastro assinado e os cabeçalhos List-Unsubscribe, e recusa enviar se o segredo não existir. Defina `UNSUBSCRIBE_SECRET` na Vercel (um texto aleatório longo).
 - Licenças de código, fontes e imagens: veja `LICENSES.md`.
 
+## Evitar a pausa do Supabase (plano grátis)
+- O Supabase pausa projetos grátis com pouca atividade no banco em 7 dias ([documentação](https://supabase.com/docs/guides/platform/free-project-pausing)). Ela diz que, em geral, algumas consultas por dia bastam.
+- `vercel.json` chama `/api/catalog` (rota pública, só leitura do catálogo) **3 vezes por dia**: por volta de 08h, 12h e 18h de Brasília. Não precisa de variável nova. No Hobby, cada execução pode atrasar até cerca de 1 hora.
+- **Não é garantia.** Se pausar mesmo assim: painel do Supabase → projeto → **Resume project**. Só o plano pago do Supabase impede a pausa por inatividade.
+- Os agendamentos só rodam no deploy de produção. Confira em Vercel → projeto → configurações de Cron Jobs.
+- Loja vendendo de verdade: o plano Hobby da Vercel é só para uso não comercial.
+
 ## Exclusão automática de contas inativas
 - **Prazo: 24 meses sem acessar o site** (o mesmo da Política de Privacidade). Escolhi 24 porque a lei pede que não se guarde dado sem necessidade, mas o cliente de relógio/perfume compra poucas vezes por ano; 3 a 6 meses apagaria gente que ainda é cliente. O mínimo aceito pelo código é 6 meses.
 - "Acesso" = a pessoa entrou no site logada (registrado em `profiles.last_seen_at`, no máximo 1 vez por dia). Quem já tinha conta começa com a data da migração `0006`, então **nada é excluído antes de 24 meses depois do deploy**.
